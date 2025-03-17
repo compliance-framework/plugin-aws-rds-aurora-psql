@@ -203,6 +203,7 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 			streamId, err := sdk.SeededUUID(map[string]string{
 				"type":    "aws-cloud--rds-aurora-psql",
 				"_policy": policyPath,
+				"rds_instance": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
 			})
 			if err != nil {
 				l.logger.Error("Failed to seedUUID", "error", err)
