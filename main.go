@@ -105,9 +105,10 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 							},
 						},
 						Labels: map[string]string{
-							"package":             string(result.Policy.Package),
-							"type":                "aws-cloud--rds-aurora-psql",
-							"DBClusterIdentifier": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
+							"package":       string(result.Policy.Package),
+							"type":          "aws",
+							"service":       "rds",
+							"db_cluster_id": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
 						},
 					})
 
@@ -121,9 +122,10 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 							},
 						},
 						Labels: map[string]string{
-							"package":             string(result.Policy.Package),
-							"type":                "aws-cloud--rds-aurora-psql",
-							"DBClusterIdentifier": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
+							"package":       string(result.Policy.Package),
+							"type":          "aws",
+							"service":       "rds",
+							"db_cluster_id": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
 						},
 					})
 				}
@@ -145,9 +147,10 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 							},
 						},
 						Labels: map[string]string{
-							"package":             string(result.Policy.Package),
-							"type":                "aws-cloud--rds-aurora-psql",
-							"DBClusterIdentifier": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
+							"package":       string(result.Policy.Package),
+							"type":          "aws",
+							"service":       "rds",
+							"db_cluster_id": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
 						},
 					})
 
@@ -168,9 +171,10 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 								},
 							},
 							Labels: map[string]string{
-								"package":             string(result.Policy.Package),
-								"type":                "aws-cloud--rds-aurora-psql",
-								"DBClusterIdentifier": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
+								"package":       string(result.Policy.Package),
+								"type":          "aws",
+								"service":       "rds",
+								"db_cluster_id": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
 							},
 						})
 					}
@@ -201,8 +205,10 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 			assessmentResult.End = timestamppb.New(endTime)
 
 			streamId, err := sdk.SeededUUID(map[string]string{
-				"type":    "aws-cloud--rds-aurora-psql",
-				"_policy": policyPath,
+				"type":          "aws",
+				"service":       "rds",
+				"db_cluster_id": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
+				"_policy":       policyPath,
 			})
 			if err != nil {
 				l.logger.Error("Failed to seedUUID", "error", err)
@@ -221,8 +227,10 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 			err = apiHelper.CreateResult(
 				streamId.String(),
 				map[string]string{
-					"type":    "aws-cloud--rds-aurora-psql",
-					"_policy": policyPath,
+					"type":          "aws",
+					"service":       "rds",
+					"db_cluster_id": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
+					"_policy":       policyPath,
 				},
 				policyPath,
 				assessmentResult.Result())
