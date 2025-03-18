@@ -58,9 +58,9 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 	}
 	var RDSInstances []map[string]interface{}
 	for _, cluster := range clusters.DBClusters {
-		l.logger.Debug("ClusterID: ", cluster.DBClusterIdentifier)
+		l.logger.Debug("ClusterID: ", *cluster.DBClusterIdentifier)
 		RDSInstances = append(RDSInstances, map[string]interface{}{
-			"DBClusterIdentifier":              cluster.DBClusterIdentifier,
+			"DBClusterIdentifier":              *cluster.DBClusterIdentifier,
 			"PubliclyAccessible":               cluster.PubliclyAccessible,
 			"MultiAZ":                          cluster.MultiAZ,
 			"BackupRetentionPeriod":            cluster.BackupRetentionPeriod,
