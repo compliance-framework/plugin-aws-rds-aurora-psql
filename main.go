@@ -73,6 +73,7 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 		l.logger.Debug("ClusterID: ", *cluster.DBClusterIdentifier)
 		RDSInstances = append(RDSInstances, map[string]interface{}{
 			"DBClusterIdentifier":              *cluster.DBClusterIdentifier,
+			"Engine":                           cluster.Engine,
 			"PubliclyAccessible":               cluster.PubliclyAccessible,
 			"MultiAZ":                          cluster.MultiAZ,
 			"BackupRetentionPeriod":            cluster.BackupRetentionPeriod,
@@ -118,7 +119,8 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 			}
 			subjectAttributeMap := map[string]string{
 				"type":       "aws",
-				"service":    "rds-aurora-psql",
+				"service":    "rds",
+				"engine":     fmt.Sprintf("%v", instance["Engine"]),
 				"cluster_id": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
 			}
 
