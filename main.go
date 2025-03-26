@@ -117,8 +117,8 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 				},
 			}
 			subjectAttributeMap := map[string]string{
-				"type":             "aws-rds-aurora-psql",
-				"rds_cluster_info": fmt.Sprintf("%v", instance),
+				"type":       "aws-rds-aurora-psql",
+				"cluster_id": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
 			}
 
 			subjects := []*proto.SubjectReference{
