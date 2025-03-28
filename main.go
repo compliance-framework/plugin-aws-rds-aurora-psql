@@ -73,7 +73,7 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 		l.logger.Debug("ClusterID: ", *cluster.DBClusterIdentifier)
 		RDSInstances = append(RDSInstances, map[string]interface{}{
 			"DBClusterIdentifier":              *cluster.DBClusterIdentifier,
-			"Engine":                           cluster.Engine,
+			"Engine":                           *cluster.Engine,
 			"PubliclyAccessible":               cluster.PubliclyAccessible,
 			"MultiAZ":                          cluster.MultiAZ,
 			"BackupRetentionPeriod":            cluster.BackupRetentionPeriod,
