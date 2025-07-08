@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
+	"github.com/aws/aws-sdk-go-v2/service/rds/types"
 	policyManager "github.com/compliance-framework/agent/policy-manager"
 	"github.com/compliance-framework/agent/runner"
 	"github.com/compliance-framework/agent/runner/proto"
 	"github.com/compliance-framework/plugin-aws-rds-aurora-psql/internal"
 	"github.com/hashicorp/go-hclog"
 	goplugin "github.com/hashicorp/go-plugin"
+	"iter"
 	"os"
 	"slices"
 )
@@ -31,55 +34,43 @@ func (l *CompliancePlugin) Configure(req *proto.ConfigureRequest) (*proto.Config
 	return &proto.ConfigureResponse{}, nil
 }
 
-func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.EvalRequest) ([]*proto.Observation, []*proto.Finding, error) {
+func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.EvalRequest) ([]*proto.Evidence, error) {
 	var accumulatedErrors error
 
 	activities := make([]*proto.Activity, 0)
-	findings := make([]*proto.Finding, 0)
-	observations := make([]*proto.Observation, 0)
+	evidences := make([]*proto.Evidence, 0)
+
+	activities = append(activities, &proto.Activity{
+		Title:       "Collected RDS cluster info",
+		Description: "Collected RDS cluster info and prepare collected data for validation in policy engine",
+		Steps: []*proto.Step{
+			{
+				Title:       "Fetched RDS cluster info",
+				Description: "Fetched RDS cluster info using AWS SDK.",
+			},
+		},
+	})
 
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(os.Getenv("AWS_REGION")))
 	if err != nil {
 		l.logger.Error("unable to load SDK config", "error", err)
 		accumulatedErrors = errors.Join(accumulatedErrors, err)
 	}
+	client := rds.NewFromConfig(cfg)
+	for cluster, err := range getAuroraInstances(ctx, client) {
+		if err != nil {
+			l.logger.Error("unable to get cluster", "error", err)
+			accumulatedErrors = errors.Join(accumulatedErrors, err)
+			break
+		}
 
-	svc := rds.NewFromConfig(cfg)
-
-	clusters, err := svc.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{})
-	if err != nil {
-		l.logger.Error("unable to list DB clusters", "error", err)
-		accumulatedErrors = errors.Join(accumulatedErrors, err)
-	}
-
-	RDSConfigSteps := make([]*proto.Step, 0)
-	RDSConfigSteps = append(RDSConfigSteps, &proto.Step{
-		Title:       "Fetched RDS cluster info",
-		Description: "Fetched RDS cluster info using AWS SDK.",
-	})
-	activities = append(activities, &proto.Activity{
-		Title:       "Collected RDS cluster info",
-		Description: "Collected RDS cluster info and prepare collected data for validation in policy engine",
-		Steps:       RDSConfigSteps,
-	})
-
-	var RDSInstances []map[string]interface{}
-	for _, cluster := range clusters.DBClusters {
-		l.logger.Debug("ClusterID: ", *cluster.DBClusterIdentifier)
-		RDSInstances = append(RDSInstances, map[string]interface{}{
-			"DBClusterIdentifier":              *cluster.DBClusterIdentifier,
-			"Engine":                           *cluster.Engine,
-			"PubliclyAccessible":               cluster.PubliclyAccessible,
-			"MultiAZ":                          cluster.MultiAZ,
-			"BackupRetentionPeriod":            cluster.BackupRetentionPeriod,
-			"EnabledCloudwatchLogsExports":     cluster.EnabledCloudwatchLogsExports,
-			"IamDatabaseAuthenticationEnabled": cluster.IAMDatabaseAuthenticationEnabled,
-			"AutoMinorVersionUpgrade":          cluster.AutoMinorVersionUpgrade,
-		})
-	}
-
-	l.logger.Trace("evaluating data", RDSInstances)
-	for _, instance := range RDSInstances {
+		labels := map[string]string{
+			"provider":        "aws",
+			"type":            "rds",
+			"cluster":         aws.ToString(cluster.DBClusterIdentifier),
+			"engine":          aws.ToString(cluster.Engine),
+			"_engine-version": aws.ToString(cluster.EngineVersion),
+		}
 
 		actors := []*proto.OriginActor{
 			{
@@ -92,50 +83,62 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 						Text: internal.StringAddressed("The Continuous Compliance Framework"),
 					},
 				},
-				Props: nil,
 			},
 			{
-				Title: "Continuous Compliance Framework - AWS RDS Aurora PSQL Plugin",
+				Title: "Continuous Compliance Framework - Local SSH Plugin",
 				Type:  "tool",
 				Links: []*proto.Link{
 					{
-						Href: "https://github.com/compliance-framework/plugin-aws-rds-aurora-psql",
+						Href: "https://github.com/compliance-framework/plugin-local-ssh",
 						Rel:  internal.StringAddressed("reference"),
-						Text: internal.StringAddressed("The Continuous Compliance Framework' AWS RDS Aurora PSQL Plugin"),
+						Text: internal.StringAddressed("The Continuous Compliance Framework' Local SSH Plugin"),
 					},
 				},
-				Props: nil,
 			},
 		}
-		components := []*proto.ComponentReference{
+		components := []*proto.Component{
 			{
-				Identifier: "common-components/aws-rds-aurora-psql",
+				Identifier:  "common-components/amazon-rds",
+				Type:        "service",
+				Title:       "Amazon RDS",
+				Description: "Amazon RDS is a managed relational database service provided by AWS that supports engines like PostgreSQL, MySQL, SQL Server, and others. It automates common database administration tasks such as provisioning, backups, patching, scaling, and monitoring. RDS provides integrated features for encryption, high availability, and network isolation.",
+				Purpose:     "To provide scalable, secure, and managed relational database infrastructure that supports application data storage with minimal administrative overhead, enabling compliance with availability, confidentiality, and integrity requirements.",
 			},
 		}
-
-		labels := map[string]string{
-			"type":       "aws-rds-aurora-psql",
-			"service":    "rds",
-			"cluster-id": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
-		}
-		subjects := []*proto.SubjectReference{
+		inventory := []*proto.InventoryItem{
 			{
-				Type: "aws-rds-aurora-psql",
-				Attributes: map[string]string{
-					"type":       "aws",
-					"service":    "rds",
-					"engine":     fmt.Sprintf("%v", instance["Engine"]),
-					"cluster_id": fmt.Sprintf("%v", instance["DBClusterIdentifier"]),
-				},
-				Title:   internal.StringAddressed("RDS Instance"),
-				Remarks: internal.StringAddressed("Plugin running checks against AWS RDS configuration"),
+				Identifier: fmt.Sprintf("aws-rds/%s", aws.ToString(cluster.DBClusterIdentifier)),
+				Type:       "database",
+				Title:      fmt.Sprintf("Amazon RDS Cluster [%s]", aws.ToString(cluster.DBClusterIdentifier)),
 				Props: []*proto.Property{
 					{
-						Name:    "aws-rds-aurora-psql",
-						Value:   "CCF",
-						Remarks: internal.StringAddressed("The Aurora PSQL RDS cluster of which the policy was executed against"),
+						Name:  "cluster",
+						Value: aws.ToString(cluster.DBClusterIdentifier),
+					},
+					{
+						Name:  "engine",
+						Value: aws.ToString(cluster.Engine),
+					},
+					{
+						Name:  "engine-version",
+						Value: aws.ToString(cluster.EngineVersion),
 					},
 				},
+				ImplementedComponents: []*proto.InventoryItemImplementedComponent{
+					{
+						Identifier: "common-components/amazon-rds",
+					},
+				},
+			},
+		}
+		subjects := []*proto.Subject{
+			{
+				Type:       proto.SubjectType_SUBJECT_TYPE_COMPONENT,
+				Identifier: "common-components/amazon-rds",
+			},
+			{
+				Type:       proto.SubjectType_SUBJECT_TYPE_INVENTORY_ITEM,
+				Identifier: fmt.Sprintf("aws-rds/%s", aws.ToString(cluster.DBClusterIdentifier)),
 			},
 		}
 
@@ -146,46 +149,36 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 				l.logger,
 				internal.MergeMaps(
 					labels,
-					map[string]string{
-						"_policy_path": policyPath,
-					},
+					map[string]string{},
 				),
 				subjects,
 				components,
+				inventory,
 				actors,
 				activities,
 			)
-			obs, finds, err := processor.GenerateResults(ctx, policyPath, instance)
-			observations = slices.Concat(observations, obs)
-			findings = slices.Concat(findings, finds)
+			evidence, err := processor.GenerateResults(ctx, policyPath, cluster)
+			evidences = slices.Concat(evidences, evidence)
 			if err != nil {
 				accumulatedErrors = errors.Join(accumulatedErrors, err)
 			}
-
 		}
 	}
 
-	return observations, findings, accumulatedErrors
+	return evidences, accumulatedErrors
 }
 
 func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.ApiHelper) (*proto.EvalResponse, error) {
 	ctx := context.TODO()
 
-	observations, findings, err := l.EvaluatePolicies(ctx, request)
+	evidences, err := l.EvaluatePolicies(ctx, request)
 	if err != nil {
 		return &proto.EvalResponse{
 			Status: proto.ExecutionStatus_FAILURE,
 		}, err
 	}
-	if err = apiHelper.CreateFindings(ctx, findings); err != nil {
-		l.logger.Error("Failed to send compliance findings", "error", err)
-		return &proto.EvalResponse{
-			Status: proto.ExecutionStatus_FAILURE,
-		}, err
-	}
-
-	if err = apiHelper.CreateObservations(ctx, observations); err != nil {
-		l.logger.Error("Failed to send compliance observations", "error", err)
+	if err = apiHelper.CreateEvidence(ctx, evidences); err != nil {
+		l.logger.Error("Failed to send compliance evidence", "error", err)
 		return &proto.EvalResponse{
 			Status: proto.ExecutionStatus_FAILURE,
 		}, err
@@ -194,6 +187,22 @@ func (l *CompliancePlugin) Eval(request *proto.EvalRequest, apiHelper runner.Api
 	return &proto.EvalResponse{
 		Status: proto.ExecutionStatus_SUCCESS,
 	}, err
+}
+
+func getAuroraInstances(ctx context.Context, client *rds.Client) iter.Seq2[types.DBCluster, error] {
+	return func(yield func(types.DBCluster, error) bool) {
+		out, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{})
+		if err != nil {
+			yield(types.DBCluster{}, err)
+			return
+		}
+
+		for _, cluster := range out.DBClusters {
+			if !yield(cluster, nil) {
+				return
+			}
+		}
+	}
 }
 
 func main() {
@@ -206,7 +215,7 @@ func main() {
 		logger: logger,
 	}
 	// pluginMap is the map of plugins we can dispense.
-	logger.Debug("Initiating AWS RDS Aurora psql plugin")
+	logger.Debug("Initiating AWS RDS Aurora plugin")
 
 	goplugin.Serve(&goplugin.ServeConfig{
 		HandshakeConfig: runner.HandshakeConfig,
