@@ -3,9 +3,10 @@ module github.com/compliance-framework/plugin-aws-rds-aurora-psql
 go 1.23.2
 
 require (
+	github.com/aws/aws-sdk-go-v2 v1.36.3
 	github.com/aws/aws-sdk-go-v2/config v1.29.9
 	github.com/aws/aws-sdk-go-v2/service/rds v1.94.1
-	github.com/compliance-framework/agent v0.1.9-0.20250708121809-c5059c3efac8
+	github.com/compliance-framework/agent v0.2.1
 	github.com/hashicorp/go-hclog v1.5.0
 	github.com/hashicorp/go-plugin v1.6.2
 )
@@ -13,7 +14,6 @@ require (
 require (
 	github.com/OneOfOne/xxhash v1.2.8 // indirect
 	github.com/agnivade/levenshtein v1.2.0 // indirect
-	github.com/aws/aws-sdk-go-v2 v1.36.3 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.62 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.30 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.34 // indirect
@@ -27,7 +27,7 @@ require (
 	github.com/aws/smithy-go v1.22.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/compliance-framework/configuration-service v0.2.12-0.20250708103936-23c66564a854 // indirect
+	github.com/compliance-framework/api v0.4.0 // indirect
 	github.com/defenseunicorns/go-oscal v0.6.2 // indirect
 	github.com/fatih/color v1.15.0 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
