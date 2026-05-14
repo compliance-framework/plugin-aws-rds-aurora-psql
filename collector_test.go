@@ -252,3 +252,29 @@ func TestCloudTrailCollectionUsesEventSourceQueries(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitCloudTrailEventsForResourceSeparatesAccountWideEvents(t *testing.T) {
+	events := []map[string]interface{}{
+		{
+			"event_name": "ModifyDBInstance",
+			"resources": []cloudtrailtypes.Resource{
+				{ResourceName: aws.String("db-1")},
+			},
+		},
+		{
+			"event_name":       "DeleteDBInstance",
+			"cloudtrail_event": `{"requestParameters":{"dBInstanceIdentifier":"db-1"}}`,
+		},
+		{
+			"event_name":       "DeleteUser",
+			"cloudtrail_event": `{"requestParameters":{"userName":"alice"}}`,
+		},
+	}
+	resourceEvents, accountEvents := splitCloudTrailEventsForResource(events, "db-1", "arn:aws:rds:us-east-1:123456789012:db:db-1")
+	if len(resourceEvents) != 2 {
+		t.Fatalf("expected two resource events, got %#v", resourceEvents)
+	}
+	if len(accountEvents) != 1 || accountEvents[0]["event_name"] != "DeleteUser" {
+		t.Fatalf("expected IAM event to remain account-wide, got %#v", accountEvents)
+	}
+}

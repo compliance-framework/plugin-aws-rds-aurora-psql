@@ -108,6 +108,7 @@ receive one input document per resource:
   },
   "dynamic": {
     "cloudtrail_events": [],
+    "account_cloudtrail_events": [],
     "rds_events": [],
     "cloudwatch_metrics": {}
   },
@@ -164,6 +165,10 @@ DYNAMIC evidence uses the configured trailing window:
 - CloudTrail `LookupEvents` for RDS/IAM management and access-removal events
 - RDS `DescribeEvents` for backup, restoration, and deletion categories
 - CloudWatch `GetMetricData` for `CPUUtilization`, `DatabaseConnections`, and `FreeStorageSpace`
+
+`dynamic.cloudtrail_events` contains only events matched to the current resource.
+Account-scoped events that do not identify the current resource are exposed under
+`dynamic.account_cloudtrail_events`.
 
 VPC/subnet/security-group deep posture and KMS key internals are intentionally
 out of scope for this plugin.

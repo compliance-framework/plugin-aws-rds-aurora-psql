@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -263,7 +264,7 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 			accumulated = errors.Join(accumulated, tagErr)
 		}
 		sslEnforcement := collectInstanceSSLEnforcement(ctx, clients.RDS, instance, &resourceErrors, &accumulated)
-		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(instance.DBInstanceIdentifier), rdstypes.SourceTypeDbInstance, "DBInstanceIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
+		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(instance.DBInstanceIdentifier), aws.ToString(instance.DBInstanceArn), rdstypes.SourceTypeDbInstance, "DBInstanceIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newInstanceRecord(target.Account, target.Region, instance, tags, instanceSnapshots[aws.ToString(instance.DBInstanceIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
 		records = append(records, &record)
 	}
@@ -277,7 +278,7 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 			accumulated = errors.Join(accumulated, tagErr)
 		}
 		sslEnforcement := collectClusterSSLEnforcement(ctx, clients.RDS, cluster, &resourceErrors, &accumulated)
-		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(cluster.DBClusterIdentifier), rdstypes.SourceTypeDbCluster, "DBClusterIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
+		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(cluster.DBClusterIdentifier), aws.ToString(cluster.DBClusterArn), rdstypes.SourceTypeDbCluster, "DBClusterIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newClusterRecord(target.Account, target.Region, cluster, tags, clusterSnapshots[aws.ToString(cluster.DBClusterIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
 		records = append(records, &record)
 	}
@@ -587,7 +588,7 @@ func (c *Collector) collectCloudTrailEvents(ctx context.Context, client CloudTra
 	return events, accumulated
 }
 
-func (c *Collector) dynamicForResource(ctx context.Context, clients AWSClientSet, sourceID string, sourceType rdstypes.SourceType, metricDimension string, start time.Time, end time.Time, cloudTrailEvents []map[string]interface{}, resourceErrors *[]CollectionError, accumulated *error) map[string]interface{} {
+func (c *Collector) dynamicForResource(ctx context.Context, clients AWSClientSet, sourceID string, sourceARN string, sourceType rdstypes.SourceType, metricDimension string, start time.Time, end time.Time, cloudTrailEvents []map[string]interface{}, resourceErrors *[]CollectionError, accumulated *error) map[string]interface{} {
 	rdsEvents, err := c.collectRDSEvents(ctx, clients.RDS, sourceID, sourceType, start, end)
 	if err != nil {
 		*resourceErrors = append(*resourceErrors, CollectionError{Scope: "rds_events", Message: err.Error()})
@@ -598,11 +599,108 @@ func (c *Collector) dynamicForResource(ctx context.Context, clients AWSClientSet
 		*resourceErrors = append(*resourceErrors, CollectionError{Scope: "cloudwatch_metrics", Message: metricErr.Error()})
 		*accumulated = errors.Join(*accumulated, metricErr)
 	}
+	resourceCloudTrailEvents, accountCloudTrailEvents := splitCloudTrailEventsForResource(cloudTrailEvents, sourceID, sourceARN)
 	return map[string]interface{}{
-		"cloudtrail_events":  cloudTrailEvents,
-		"rds_events":         rdsEvents,
-		"cloudwatch_metrics": metrics,
+		"cloudtrail_events":         resourceCloudTrailEvents,
+		"account_cloudtrail_events": accountCloudTrailEvents,
+		"rds_events":                rdsEvents,
+		"cloudwatch_metrics":        metrics,
 	}
+}
+
+func splitCloudTrailEventsForResource(events []map[string]interface{}, sourceID string, sourceARN string) ([]map[string]interface{}, []map[string]interface{}) {
+	resourceEvents := make([]map[string]interface{}, 0)
+	accountEvents := make([]map[string]interface{}, 0)
+	for _, event := range events {
+		if cloudTrailEventMatchesResource(event, sourceID, sourceARN) {
+			resourceEvents = append(resourceEvents, event)
+			continue
+		}
+		accountEvents = append(accountEvents, event)
+	}
+	return resourceEvents, accountEvents
+}
+
+func cloudTrailEventMatchesResource(event map[string]interface{}, sourceID string, sourceARN string) bool {
+	if sourceID == "" && sourceARN == "" {
+		return false
+	}
+	if resources, ok := event["resources"]; ok && cloudTrailResourcesMatch(resources, sourceID, sourceARN) {
+		return true
+	}
+	if raw, ok := event["cloudtrail_event"].(string); ok && raw != "" {
+		return cloudTrailPayloadContainsResource(raw, sourceID, sourceARN)
+	}
+	return false
+}
+
+func cloudTrailResourcesMatch(resources interface{}, sourceID string, sourceARN string) bool {
+	switch typed := resources.(type) {
+	case []cloudtrailtypes.Resource:
+		for _, resource := range typed {
+			if stringMatchesResource(aws.ToString(resource.ResourceName), sourceID, sourceARN) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if resourceMapMatches(item, sourceID, sourceARN) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resourceMapMatches(item interface{}, sourceID string, sourceARN string) bool {
+	resource, ok := item.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	for _, key := range []string{"ResourceName", "resourceName", "resource_arn", "resourceArn", "ARN", "arn"} {
+		if value, ok := resource[key].(string); ok && stringMatchesResource(value, sourceID, sourceARN) {
+			return true
+		}
+	}
+	return false
+}
+
+func cloudTrailPayloadContainsResource(raw string, sourceID string, sourceARN string) bool {
+	var payload interface{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return stringMatchesResource(raw, sourceID, sourceARN)
+	}
+	return jsonValueContainsResource(payload, sourceID, sourceARN)
+}
+
+func jsonValueContainsResource(value interface{}, sourceID string, sourceARN string) bool {
+	switch typed := value.(type) {
+	case string:
+		return stringMatchesResource(typed, sourceID, sourceARN)
+	case []interface{}:
+		for _, item := range typed {
+			if jsonValueContainsResource(item, sourceID, sourceARN) {
+				return true
+			}
+		}
+	case map[string]interface{}:
+		for _, item := range typed {
+			if jsonValueContainsResource(item, sourceID, sourceARN) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func stringMatchesResource(value string, sourceID string, sourceARN string) bool {
+	if sourceID != "" && value == sourceID {
+		return true
+	}
+	if sourceARN != "" && value == sourceARN {
+		return true
+	}
+	return false
 }
 
 func (c *Collector) collectRDSEvents(ctx context.Context, client RDSAPI, sourceID string, sourceType rdstypes.SourceType, start time.Time, end time.Time) ([]map[string]interface{}, error) {

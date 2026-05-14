@@ -209,7 +209,7 @@ func newResourceRecord(account AccountContext, region string, resource ResourceI
 		"resource_type": resource.Type,
 	}
 	for key, value := range account.Tags {
-		labels["account_"+key] = value
+		labels["account_tag_"+key] = value
 	}
 	return ResourceRecord{
 		Input:         input,

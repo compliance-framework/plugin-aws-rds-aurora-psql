@@ -69,7 +69,7 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 func (l *CompliancePlugin) evaluateRecord(ctx context.Context, policyPaths []string, record *ResourceRecord) ([]*proto.Evidence, error) {
 	var accumulated error
 	evidences := make([]*proto.Evidence, 0)
-	labels := mergeStringMaps(record.Labels, l.parsedConfig.PolicyLabels)
+	labels := mergeStringMaps(l.parsedConfig.PolicyLabels, record.Labels)
 	activities := []*proto.Activity{
 		{
 			Title:       "Collect AWS RDS evidence",

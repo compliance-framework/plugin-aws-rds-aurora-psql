@@ -48,7 +48,7 @@ func TestInitUpsertsSubjectTemplates(t *testing.T) {
 
 func TestRegoInputMapDocumentsNestedPolicyInputsAndCollectionHashes(t *testing.T) {
 	record := newInstanceRecord(
-		AccountContext{AccountID: "123456789012"},
+		AccountContext{AccountID: "123456789012", Tags: map[string]string{"id": "configured-account-tag"}},
 		"us-east-1",
 		rdstypes.DBInstance{
 			DBInstanceIdentifier: aws.String("db-1"),
@@ -85,6 +85,36 @@ func TestRegoInputMapDocumentsNestedPolicyInputsAndCollectionHashes(t *testing.T
 	}
 	if _, ok := record.Labels["primary"]; ok {
 		t.Fatal("raw payload hash leaked into labels")
+	}
+	if record.Labels["account_id"] != "123456789012" {
+		t.Fatalf("account tag overwrote account_id label: %#v", record.Labels)
+	}
+	if record.Labels["account_tag_id"] != "configured-account-tag" {
+		t.Fatalf("expected account tag to use collision-safe prefix, got %#v", record.Labels)
+	}
+}
+
+func TestPolicyLabelsCannotOverrideIdentityLabels(t *testing.T) {
+	resourceLabels := map[string]string{
+		"account_id":   "123456789012",
+		"region":       "us-east-1",
+		"resource_id":  "db-1",
+		"resource_arn": "arn:aws:rds:us-east-1:123456789012:db:db-1",
+	}
+	policyLabels := map[string]string{
+		"account_id":  "wrong",
+		"region":      "wrong",
+		"resource_id": "wrong",
+		"team":        "security",
+	}
+	labels := mergeStringMaps(policyLabels, resourceLabels)
+	for key, expected := range resourceLabels {
+		if labels[key] != expected {
+			t.Fatalf("identity label %s was overridden: %#v", key, labels)
+		}
+	}
+	if labels["team"] != "security" {
+		t.Fatalf("non-identity policy label was not preserved: %#v", labels)
 	}
 }
 
