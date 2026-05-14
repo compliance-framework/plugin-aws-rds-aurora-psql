@@ -1,6 +1,169 @@
-# AWS RDS Aurora psql plugin
+# AWS RDS/Aurora PostgreSQL Plugin
 
-## Assumptions
+This plugin collects read-only evidence for Amazon RDS instances, Amazon Aurora
+clusters, and RDS snapshots, then evaluates configured CCF/Rego policy bundles
+against a normalized per-resource input document.
 
-- That the agent running this plugin has access to the classic AWS env vars in order to use SDK methods
-- There are a set of policies specfically scoped to RDS that the config in the agent is pointing to
+It implements the RunnerV2 plugin interface. During `Init`, it registers subject
+templates for:
+
+- `aws-rds-instance`
+- `aws-rds-cluster`
+- `aws-rds-snapshot`
+
+Account and region are recorded as labels and input context. They are not
+registered as standalone subjects.
+
+## Configuration
+
+The CCF agent passes plugin config as flat string fields. Structured fields are
+JSON-encoded strings.
+
+| Key | Required | Description |
+| --- | --- | --- |
+| `accounts` | No | JSON array of account targets. Empty means use the account from the configured AWS credential chain. |
+| `default_regions` | No | JSON array of regions used when an account omits `regions`. Empty means use the AWS SDK default region. |
+| `lookback_days` | No | Dynamic evidence trailing window in days. Default: `90`. |
+| `policy_inputs` | No | JSON object exposed to Rego as `input.policy_inputs`. |
+| `policy_labels` | No | JSON string map merged into evidence labels. |
+| `max_concurrency` | No | Maximum concurrent account/region collection workers. Default: `4`. |
+| `api_timeout_seconds` | No | Per-account/region collection timeout. Default: `60`. |
+
+Each `accounts` entry supports:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `account_id` | No | AWS account ID for labeling. If omitted, the plugin resolves it with STS. |
+| `regions` | No | JSON array field inside the account object. Overrides `default_regions`. |
+| `role_arn` | No | IAM role to assume before collection for this account. |
+| `external_id` | No | External ID used with `role_arn`. |
+| `session_name` | No | STS assume-role session name. |
+| `tags` | No | String map copied into account labels and input context. |
+
+Example:
+
+```json
+{
+  "accounts": "[{\"account_id\":\"123456789012\",\"regions\":[\"us-east-1\",\"us-west-2\"],\"role_arn\":\"arn:aws:iam::123456789012:role/rds-readonly\",\"external_id\":\"ccf\",\"session_name\":\"ccf-rds\",\"tags\":{\"environment\":\"prod\"}}]",
+  "default_regions": "[\"us-east-1\"]",
+  "lookback_days": "90",
+  "policy_inputs": "{\"minimum_backup_retention_days\":7,\"approved_snapshot_accounts\":[\"111111111111\"]}",
+  "policy_labels": "{\"team\":\"security\"}"
+}
+```
+
+## AWS Authentication
+
+The plugin uses AWS SDK v2 native authentication. It supports the default
+credential chain, including environment variables, shared config profiles, SSO,
+web identity, ECS credentials, and instance metadata. When `role_arn` is
+configured for an account, the plugin uses STS AssumeRole on top of the default
+credential chain.
+
+All collection calls are read-only. Fetch failures are accumulated and returned
+from `Eval`, but collection continues for other account/region/resource checks
+where possible.
+
+## Rego Input Schema
+
+Each RDS instance, cluster, and snapshot is evaluated independently. Policies
+receive one input document per resource:
+
+```json
+{
+  "schema_version": "v1",
+  "source": "aws-rds-aurora-psql",
+  "account": {
+    "account_id": "123456789012",
+    "role_arn": "arn:aws:iam::123456789012:role/rds-readonly",
+    "tags": {
+      "environment": "prod"
+    }
+  },
+  "region": {
+    "name": "us-east-1"
+  },
+  "resource": {
+    "id": "database-1",
+    "arn": "arn:aws:rds:us-east-1:123456789012:db:database-1",
+    "type": "db-instance",
+    "engine": "postgres",
+    "engine_version": "15.4"
+  },
+  "config": {
+    "storage_encrypted": true,
+    "kms_key_id": "arn:aws:kms:us-east-1:123456789012:key/example",
+    "multi_az": true,
+    "backup_retention_period": 7,
+    "preferred_backup_window": "03:00-04:00",
+    "latest_restorable_time": "2026-05-14T11:30:00Z",
+    "deletion_protection": true,
+    "publicly_accessible": false,
+    "iam_database_authentication_enabled": true,
+    "ca_certificate_identifier": "rds-ca-rsa2048-g1",
+    "enabled_cloudwatch_logs_exports": ["postgresql"],
+    "ssl_enforcement": {
+      "default.postgres15": "1"
+    }
+  },
+  "dynamic": {
+    "cloudtrail_events": [],
+    "rds_events": [],
+    "cloudwatch_metrics": {}
+  },
+  "snapshots": [
+    {
+      "snapshot_identifier": "database-1-automated",
+      "snapshot_type": "automated",
+      "status": "available",
+      "encrypted": true,
+      "kms_key_id": "arn:aws:kms:us-east-1:123456789012:key/example",
+      "shared_accounts": [],
+      "public": false
+    }
+  ],
+  "tags": {
+    "owner": "data-platform"
+  },
+  "collection": {
+    "collected_at": "2026-05-14T12:00:00Z",
+    "collector_version": "aws-rds-aurora-psql",
+    "collection_type": "config_dynamic",
+    "lookback_window": {
+      "start": "2026-02-13T12:00:00Z",
+      "end": "2026-05-14T12:00:00Z"
+    },
+    "raw_payload_hashes": {
+      "primary": "sha256..."
+    },
+    "errors": []
+  },
+  "policy_inputs": {
+    "minimum_backup_retention_days": 7,
+    "approved_snapshot_accounts": ["111111111111"]
+  }
+}
+```
+
+`collection.raw_payload_hashes` is for traceability only. It is not used in
+identity labels or evidence seeding labels.
+
+## Collection Coverage
+
+CONFIG evidence includes:
+
+- RDS instances via `DescribeDBInstances`
+- Aurora/RDS clusters via `DescribeDBClusters`
+- Snapshots via `DescribeDBSnapshots`, `DescribeDBClusterSnapshots`, and snapshot attribute APIs
+- Tags via `ListTagsForResource`
+- TLS enforcement via DB and cluster parameter groups
+- RDS-boundary KMS posture: encryption enabled and KMS/CMK ID presence
+
+DYNAMIC evidence uses the configured trailing window:
+
+- CloudTrail `LookupEvents` for RDS/IAM management and access-removal events
+- RDS `DescribeEvents` for backup, restoration, and deletion categories
+- CloudWatch `GetMetricData` for `CPUUtilization`, `DatabaseConnections`, and `FreeStorageSpace`
+
+VPC/subnet/security-group deep posture and KMS key internals are intentionally
+out of scope for this plugin.
