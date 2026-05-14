@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail"
+	cloudtrailtypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	cloudwatchtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
@@ -92,6 +93,15 @@ func (f *fakeRDS) ListTagsForResource(_ context.Context, in *rds.ListTagsForReso
 type fakeCloudTrail struct{}
 
 func (f *fakeCloudTrail) LookupEvents(context.Context, *cloudtrail.LookupEventsInput, ...func(*cloudtrail.Options)) (*cloudtrail.LookupEventsOutput, error) {
+	return &cloudtrail.LookupEventsOutput{}, nil
+}
+
+type recordingCloudTrail struct {
+	lookupAttributes [][]cloudtrailtypes.LookupAttribute
+}
+
+func (r *recordingCloudTrail) LookupEvents(_ context.Context, in *cloudtrail.LookupEventsInput, _ ...func(*cloudtrail.Options)) (*cloudtrail.LookupEventsOutput, error) {
+	r.lookupAttributes = append(r.lookupAttributes, in.LookupAttributes)
 	return &cloudtrail.LookupEventsOutput{}, nil
 }
 
@@ -180,5 +190,65 @@ func TestCollectorContinuesAfterTargetFailure(t *testing.T) {
 	}
 	if len(record.Input.Collection.RawPayloadHashes) == 0 {
 		t.Fatal("expected raw payload hash under collection.raw_payload_hashes")
+	}
+}
+
+func TestSSLEnforcementRecognizesPostgreSQLForceSSL(t *testing.T) {
+	client := &fakeRDS{
+		parameters:        []rdstypes.Parameter{{ParameterName: aws.String("rds.force_ssl"), ParameterValue: aws.String("1")}},
+		clusterParameters: []rdstypes.Parameter{{ParameterName: aws.String("rds.force_ssl"), ParameterValue: aws.String("1")}},
+	}
+	instance := rdstypes.DBInstance{
+		DBParameterGroups: []rdstypes.DBParameterGroupStatus{{DBParameterGroupName: aws.String("postgres15")}},
+	}
+	cluster := rdstypes.DBCluster{DBClusterParameterGroup: aws.String("aurora-postgres15")}
+	var resourceErrors []CollectionError
+	var accumulated error
+
+	instanceSSL := collectInstanceSSLEnforcement(context.Background(), client, instance, &resourceErrors, &accumulated)
+	if instanceSSL["postgres15"] != "1" {
+		t.Fatalf("expected instance rds.force_ssl to be normalized, got %#v", instanceSSL)
+	}
+	clusterSSL := collectClusterSSLEnforcement(context.Background(), client, cluster, &resourceErrors, &accumulated)
+	if clusterSSL["aurora-postgres15"] != "1" {
+		t.Fatalf("expected cluster rds.force_ssl to be normalized, got %#v", clusterSSL)
+	}
+	if accumulated != nil || len(resourceErrors) != 0 {
+		t.Fatalf("unexpected SSL collection errors: %v %#v", accumulated, resourceErrors)
+	}
+}
+
+func TestAssumeRoleSourceConfigUsesTargetRegion(t *testing.T) {
+	base := aws.Config{Region: "", Credentials: aws.AnonymousCredentials{}}
+	got := assumeRoleSourceConfig(base, "us-west-2")
+	if got.Region != "us-west-2" {
+		t.Fatalf("expected assume-role STS config to use target region, got %q", got.Region)
+	}
+	if base.Region != "" {
+		t.Fatalf("base config was mutated: %#v", base)
+	}
+}
+
+func TestCloudTrailCollectionUsesEventSourceQueries(t *testing.T) {
+	client := &recordingCloudTrail{}
+	_, err := (&Collector{}).collectCloudTrailEvents(
+		context.Background(),
+		client,
+		time.Date(2026, 2, 13, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("collectCloudTrailEvents returned error: %v", err)
+	}
+	if len(client.lookupAttributes) != 2 {
+		t.Fatalf("expected one lookup per event source, got %d", len(client.lookupAttributes))
+	}
+	for _, attrs := range client.lookupAttributes {
+		if len(attrs) != 1 {
+			t.Fatalf("expected one lookup attribute, got %#v", attrs)
+		}
+		if attrs[0].AttributeKey != cloudtrailtypes.LookupAttributeKeyEventSource {
+			t.Fatalf("expected event source lookup, got %#v", attrs[0].AttributeKey)
+		}
 	}
 }

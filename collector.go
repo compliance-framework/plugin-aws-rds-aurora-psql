@@ -102,7 +102,7 @@ func (f *SDKClientFactory) ResolveTargets(ctx context.Context, cfg *PluginConfig
 			targetCfg := baseCfg.Copy()
 			targetCfg.Region = region
 			if account.RoleARN != "" {
-				stsClient := sts.NewFromConfig(baseCfg)
+				stsClient := sts.NewFromConfig(assumeRoleSourceConfig(baseCfg, region))
 				provider := stscreds.NewAssumeRoleProvider(stsClient, account.RoleARN, func(options *stscreds.AssumeRoleOptions) {
 					if account.ExternalID != "" {
 						options.ExternalID = aws.String(account.ExternalID)
@@ -133,6 +133,12 @@ func (f *SDKClientFactory) ResolveTargets(ctx context.Context, cfg *PluginConfig
 		}
 	}
 	return targets, accumulated
+}
+
+func assumeRoleSourceConfig(baseCfg aws.Config, region string) aws.Config {
+	sourceCfg := baseCfg.Copy()
+	sourceCfg.Region = region
+	return sourceCfg
 }
 
 func effectiveAccounts(cfg *PluginConfig) []AccountConfig {
@@ -439,7 +445,7 @@ func collectInstanceSSLEnforcement(ctx context.Context, client RDSAPI, instance 
 		if name == "" {
 			continue
 		}
-		value, err := collectDBRequireSSL(ctx, client, name)
+		value, err := collectDBSSLEnforcement(ctx, client, name)
 		if err != nil {
 			*resourceErrors = append(*resourceErrors, CollectionError{Scope: "db_parameter_require_ssl", Message: err.Error()})
 			*accumulated = errors.Join(*accumulated, err)
@@ -456,7 +462,7 @@ func collectClusterSSLEnforcement(ctx context.Context, client RDSAPI, cluster rd
 	if group == "" {
 		return ssl
 	}
-	value, err := collectClusterRequireSSL(ctx, client, group)
+	value, err := collectClusterSSLEnforcementValue(ctx, client, group)
 	if err != nil {
 		*resourceErrors = append(*resourceErrors, CollectionError{Scope: "db_cluster_parameter_require_ssl", Message: err.Error()})
 		*accumulated = errors.Join(*accumulated, err)
@@ -466,7 +472,9 @@ func collectClusterSSLEnforcement(ctx context.Context, client RDSAPI, cluster rd
 	return ssl
 }
 
-func collectDBRequireSSL(ctx context.Context, client RDSAPI, groupName string) (string, error) {
+var sslEnforcementParameterNames = []string{"rds.force_ssl", "require_ssl"}
+
+func collectDBSSLEnforcement(ctx context.Context, client RDSAPI, groupName string) (string, error) {
 	var marker *string
 	for {
 		out, err := client.DescribeDBParameters(ctx, &rds.DescribeDBParametersInput{
@@ -477,7 +485,7 @@ func collectDBRequireSSL(ctx context.Context, client RDSAPI, groupName string) (
 			return "", fmt.Errorf("describe_db_parameters %q: %w", groupName, err)
 		}
 		for _, parameter := range out.Parameters {
-			if strings.EqualFold(aws.ToString(parameter.ParameterName), "require_ssl") {
+			if isSSLEnforcementParameter(aws.ToString(parameter.ParameterName)) {
 				return aws.ToString(parameter.ParameterValue), nil
 			}
 		}
@@ -488,7 +496,7 @@ func collectDBRequireSSL(ctx context.Context, client RDSAPI, groupName string) (
 	}
 }
 
-func collectClusterRequireSSL(ctx context.Context, client RDSAPI, groupName string) (string, error) {
+func collectClusterSSLEnforcementValue(ctx context.Context, client RDSAPI, groupName string) (string, error) {
 	var marker *string
 	for {
 		out, err := client.DescribeDBClusterParameters(ctx, &rds.DescribeDBClusterParametersInput{
@@ -499,7 +507,7 @@ func collectClusterRequireSSL(ctx context.Context, client RDSAPI, groupName stri
 			return "", fmt.Errorf("describe_db_cluster_parameters %q: %w", groupName, err)
 		}
 		for _, parameter := range out.Parameters {
-			if strings.EqualFold(aws.ToString(parameter.ParameterName), "require_ssl") {
+			if isSSLEnforcementParameter(aws.ToString(parameter.ParameterName)) {
 				return aws.ToString(parameter.ParameterValue), nil
 			}
 		}
@@ -510,30 +518,43 @@ func collectClusterRequireSSL(ctx context.Context, client RDSAPI, groupName stri
 	}
 }
 
+func isSSLEnforcementParameter(name string) bool {
+	for _, candidate := range sslEnforcementParameterNames {
+		if strings.EqualFold(name, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Collector) collectCloudTrailEvents(ctx context.Context, client CloudTrailAPI, start time.Time, end time.Time) ([]map[string]interface{}, error) {
 	if client == nil {
 		return nil, nil
 	}
-	eventNames := []string{
-		"ModifyDBInstance",
-		"ModifyDBCluster",
-		"ModifyDBParameterGroup",
-		"ModifyDBClusterParameterGroup",
-		"CreateDBInstance",
-		"CreateDBCluster",
-		"DeleteDBInstance",
-		"DeleteDBCluster",
-		"DeleteDBSnapshot",
-		"DeleteDBClusterSnapshot",
-		"ModifyDBSnapshotAttribute",
-		"ModifyDBClusterSnapshotAttribute",
-		"DeleteUser",
-		"DetachRolePolicy",
-		"RevokeDBSecurityGroupIngress",
+	eventNamesBySource := map[string]map[string]struct{}{
+		"rds.amazonaws.com": {
+			"ModifyDBInstance":                 {},
+			"ModifyDBCluster":                  {},
+			"ModifyDBParameterGroup":           {},
+			"ModifyDBClusterParameterGroup":    {},
+			"CreateDBInstance":                 {},
+			"CreateDBCluster":                  {},
+			"DeleteDBInstance":                 {},
+			"DeleteDBCluster":                  {},
+			"DeleteDBSnapshot":                 {},
+			"DeleteDBClusterSnapshot":          {},
+			"ModifyDBSnapshotAttribute":        {},
+			"ModifyDBClusterSnapshotAttribute": {},
+			"RevokeDBSecurityGroupIngress":     {},
+		},
+		"iam.amazonaws.com": {
+			"DeleteUser":       {},
+			"DetachRolePolicy": {},
+		},
 	}
 	var accumulated error
 	events := make([]map[string]interface{}, 0)
-	for _, eventName := range eventNames {
+	for eventSource, allowedEventNames := range eventNamesBySource {
 		var token *string
 		for {
 			out, err := client.LookupEvents(ctx, &cloudtrail.LookupEventsInput{
@@ -541,19 +562,21 @@ func (c *Collector) collectCloudTrailEvents(ctx context.Context, client CloudTra
 				EndTime:   aws.Time(end),
 				LookupAttributes: []cloudtrailtypes.LookupAttribute{
 					{
-						AttributeKey:   cloudtrailtypes.LookupAttributeKeyEventName,
-						AttributeValue: aws.String(eventName),
+						AttributeKey:   cloudtrailtypes.LookupAttributeKeyEventSource,
+						AttributeValue: aws.String(eventSource),
 					},
 				},
 				NextToken:  token,
 				MaxResults: aws.Int32(50),
 			})
 			if err != nil {
-				accumulated = errors.Join(accumulated, fmt.Errorf("cloudtrail lookup %s: %w", eventName, err))
+				accumulated = errors.Join(accumulated, fmt.Errorf("cloudtrail lookup %s: %w", eventSource, err))
 				break
 			}
 			for _, event := range out.Events {
-				events = append(events, eventToMap(event))
+				if _, ok := allowedEventNames[aws.ToString(event.EventName)]; ok {
+					events = append(events, eventToMap(event))
+				}
 			}
 			if out.NextToken == nil || aws.ToString(out.NextToken) == "" {
 				break
