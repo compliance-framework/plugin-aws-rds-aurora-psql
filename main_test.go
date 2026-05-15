@@ -19,7 +19,11 @@ func TestBuildSubjectTemplatesOnlyIncludesEvaluatedRDSSubjects(t *testing.T) {
 	names := map[string]bool{}
 	for _, template := range templates {
 		names[template.Name] = true
-		for _, key := range []string{"account_id", "region", "resource_id"} {
+		requiredKeys := []string{"account_id", "region", "resource_id"}
+		if template.Name == "aws-rds-snapshot" {
+			requiredKeys = append(requiredKeys, "resource_type")
+		}
+		for _, key := range requiredKeys {
 			if !contains(template.IdentityLabelKeys, key) {
 				t.Fatalf("template %s missing identity key %s", template.Name, key)
 			}
@@ -32,6 +36,38 @@ func TestBuildSubjectTemplatesOnlyIncludesEvaluatedRDSSubjects(t *testing.T) {
 	}
 	if names["aws-rds-account-region"] {
 		t.Fatal("account/region must not be registered as an evaluated subject")
+	}
+}
+
+func TestSnapshotRecordUsesSnapshotInputAndTypeScopedIdentity(t *testing.T) {
+	record := newSnapshotRecord(
+		AccountContext{AccountID: "123456789012"},
+		"us-east-1",
+		ResourceIdentity{
+			ID:   "shared-name",
+			ARN:  "arn:aws:rds:us-east-1:123456789012:snapshot:shared-name",
+			Type: "db-snapshot",
+		},
+		map[string]interface{}{
+			"snapshot_identifier": "shared-name",
+			"snapshot_type":       "manual",
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+		time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC),
+		Window{Start: "2026-02-14T12:00:00Z", End: "2026-05-15T12:00:00Z"},
+		map[string]interface{}{"raw": "snapshot"},
+	)
+	if len(record.Input.Snapshots) != 1 {
+		t.Fatalf("expected standalone snapshot input.snapshots to include current snapshot, got %#v", record.Input.Snapshots)
+	}
+	if record.Input.Snapshots[0]["snapshot_identifier"] != "shared-name" {
+		t.Fatalf("unexpected snapshot payload: %#v", record.Input.Snapshots[0])
+	}
+	if record.SubjectID != "aws-rds-snapshot/123456789012/us-east-1/db-snapshot/shared-name" {
+		t.Fatalf("snapshot subject ID is not resource-type scoped: %s", record.SubjectID)
 	}
 }
 

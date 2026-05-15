@@ -157,7 +157,8 @@ func newClusterRecord(account AccountContext, region string, cluster rdstypes.DB
 }
 
 func newSnapshotRecord(account AccountContext, region string, resource ResourceIdentity, config map[string]interface{}, tags map[string]string, dynamic map[string]interface{}, errors []CollectionError, policyInputs map[string]interface{}, collectedAt time.Time, window Window, raw interface{}) ResourceRecord {
-	record := newResourceRecord(account, region, resource, config, tags, nil, dynamic, errors, policyInputs, collectedAt, window, raw, "aws-rds-snapshot", fmt.Sprintf("aws-rds-snapshot/%s/%s/%s", account.AccountID, region, resource.ID), "Amazon RDS Snapshot ["+resource.ID+"]")
+	snapshots := []map[string]interface{}{config}
+	record := newResourceRecord(account, region, resource, config, tags, snapshots, dynamic, errors, policyInputs, collectedAt, window, raw, "aws-rds-snapshot", fmt.Sprintf("aws-rds-snapshot/%s/%s/%s/%s", account.AccountID, region, resource.Type, resource.ID), "Amazon RDS Snapshot ["+resource.ID+"]")
 	record.InventoryType = "snapshot"
 	return record
 }

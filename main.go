@@ -164,10 +164,11 @@ func buildSubjectTemplates() []*proto.SubjectTemplate {
 			TitleTemplate:       "AWS RDS snapshot {{ .resource_id }} in {{ .account_id }}/{{ .region }}",
 			DescriptionTemplate: "Amazon RDS/Aurora snapshot {{ .resource_id }} in AWS account {{ .account_id }} and region {{ .region }}.",
 			PurposeTemplate:     "Represents an RDS snapshot evaluated for backup, encryption, and sharing posture.",
-			IdentityLabelKeys:   []string{"account_id", "region", "resource_id"},
+			IdentityLabelKeys:   []string{"account_id", "region", "resource_type", "resource_id"},
 			LabelSchema: []*proto.SubjectLabelSchema{
 				{Key: "account_id", Description: "AWS account ID containing the snapshot"},
 				{Key: "region", Description: "AWS region containing the snapshot"},
+				{Key: "resource_type", Description: "RDS snapshot resource type, either db-snapshot or db-cluster-snapshot"},
 				{Key: "resource_id", Description: "RDS snapshot identifier"},
 				{Key: "resource_arn", Description: "RDS snapshot ARN"},
 			},
