@@ -41,7 +41,7 @@ type CollectionMetadata struct {
 	CollectedAt      string            `json:"collected_at"`
 	CollectorVersion string            `json:"collector_version"`
 	CollectionType   string            `json:"collection_type"`
-	Errors           []CollectionError `json:"errors,omitempty"`
+	Errors           []CollectionError `json:"errors"`
 	RawPayloadHashes map[string]string `json:"raw_payload_hashes,omitempty"`
 	LookbackWindow   *Window           `json:"lookback_window,omitempty"`
 }
@@ -172,6 +172,9 @@ func newResourceRecord(account AccountContext, region string, resource ResourceI
 	}
 	if dynamic == nil {
 		dynamic = map[string]interface{}{}
+	}
+	if errors == nil {
+		errors = []CollectionError{}
 	}
 	hashes := map[string]string{}
 	if raw != nil {

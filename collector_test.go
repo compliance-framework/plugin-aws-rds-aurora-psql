@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -155,6 +156,14 @@ type fakeCloudWatch struct{}
 
 func (f *fakeCloudWatch) GetMetricData(context.Context, *cloudwatch.GetMetricDataInput, ...func(*cloudwatch.Options)) (*cloudwatch.GetMetricDataOutput, error) {
 	return &cloudwatch.GetMetricDataOutput{MetricDataResults: []cloudwatchtypes.MetricDataResult{}}, nil
+}
+
+type errorCloudWatch struct {
+	err error
+}
+
+func (e *errorCloudWatch) GetMetricData(context.Context, *cloudwatch.GetMetricDataInput, ...func(*cloudwatch.Options)) (*cloudwatch.GetMetricDataOutput, error) {
+	return nil, e.err
 }
 
 type fakeSTS struct {
@@ -730,6 +739,111 @@ func TestSnapshotRecordsIncludeCloudTrailCollectionErrors(t *testing.T) {
 	}
 	if !hasCollectionError(snapshotRecord.Input.Collection.Errors, "cloudtrail_events") {
 		t.Fatalf("expected CloudTrail error on snapshot record, got %#v", snapshotRecord.Input.Collection.Errors)
+	}
+}
+
+func TestCloudWatchFailureKeepsDynamicMetricsShape(t *testing.T) {
+	cfg, err := parsePluginConfig(map[string]string{
+		"max_concurrency":     "1",
+		"api_timeout_seconds": "5",
+	})
+	if err != nil {
+		t.Fatalf("parsePluginConfig returned error: %v", err)
+	}
+	client := &fakeRDS{
+		instances: []rdstypes.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-1"),
+				DBInstanceArn:        aws.String("arn:aws:rds:us-east-1:123456789012:db:db-1"),
+			},
+		},
+	}
+	factory := &fakeFactory{
+		targets: []ResolvedTarget{{Account: AccountContext{AccountID: "123456789012"}, Region: "us-east-1"}},
+		clients: map[string]AWSClientSet{
+			"us-east-1": {
+				RDS:        client,
+				CloudTrail: &fakeCloudTrail{},
+				CloudWatch: &errorCloudWatch{err: errors.New("cloudwatch denied")},
+				STS:        &fakeSTS{account: "123456789012"},
+			},
+		},
+	}
+	result := (&Collector{Config: cfg, Factory: factory, Now: func() time.Time {
+		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	}}).Collect(context.Background())
+	if result.Err == nil {
+		t.Fatal("expected aggregate CloudWatch error")
+	}
+	if len(result.Records) != 1 {
+		t.Fatalf("expected one record, got %d", len(result.Records))
+	}
+	metrics, ok := result.Records[0].Input.Dynamic["cloudwatch_metrics"].(map[string]interface{})
+	if !ok || metrics == nil {
+		t.Fatalf("expected stable cloudwatch_metrics map, got %#v", result.Records[0].Input.Dynamic["cloudwatch_metrics"])
+	}
+	if len(metrics) != 0 {
+		t.Fatalf("expected empty metrics map on error, got %#v", metrics)
+	}
+}
+
+func TestSnapshotDynamicKeepsCommonShape(t *testing.T) {
+	dynamic := snapshotDynamic(nil, "snapshot-1", "arn:aws:rds:us-east-1:123456789012:snapshot:snapshot-1")
+	if _, ok := dynamic["rds_events"].([]map[string]interface{}); !ok {
+		t.Fatalf("expected snapshot rds_events slice, got %#v", dynamic["rds_events"])
+	}
+	metrics, ok := dynamic["cloudwatch_metrics"].(map[string]interface{})
+	if !ok || metrics == nil {
+		t.Fatalf("expected snapshot cloudwatch_metrics map, got %#v", dynamic["cloudwatch_metrics"])
+	}
+}
+
+func TestCollectionErrorsMarshalAsArrayWhenEmpty(t *testing.T) {
+	record := newResourceRecord(
+		AccountContext{AccountID: "123456789012"},
+		"us-east-1",
+		ResourceIdentity{ID: "db-1", ARN: "arn:aws:rds:us-east-1:123456789012:db:db-1", Type: "db-instance"},
+		map[string]interface{}{},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC),
+		Window{},
+		nil,
+		"aws-rds-instance",
+		"aws-rds-instance/123456789012/us-east-1/db-1",
+		"Amazon RDS Instance [db-1]",
+	)
+	encoded, err := json.Marshal(record.Input.Collection)
+	if err != nil {
+		t.Fatalf("marshal collection: %v", err)
+	}
+	var collection map[string]interface{}
+	if err := json.Unmarshal(encoded, &collection); err != nil {
+		t.Fatalf("unmarshal collection: %v", err)
+	}
+	errorsValue, ok := collection["errors"].([]interface{})
+	if !ok || errorsValue == nil {
+		t.Fatalf("expected collection.errors array, got %s", string(encoded))
+	}
+	if len(errorsValue) != 0 {
+		t.Fatalf("expected empty collection.errors, got %#v", errorsValue)
+	}
+}
+
+func TestCloudTrailResourceMatchingIgnoresUnrelatedIAMActors(t *testing.T) {
+	iamPayload := `{"eventSource":"iam.amazonaws.com","eventName":"DeleteUser","requestParameters":{"userName":"db-1"}}`
+	event := map[string]interface{}{"cloudtrail_event": iamPayload}
+	if cloudTrailEventMatchesResource(event, "db-1", "arn:aws:rds:us-east-1:123456789012:db:db-1") {
+		t.Fatal("expected IAM actor/user names not to match RDS resources")
+	}
+
+	rdsPayload := `{"eventSource":"rds.amazonaws.com","eventName":"ModifyDBInstance","requestParameters":{"dBInstanceIdentifier":"db-1"}}`
+	event = map[string]interface{}{"cloudtrail_event": rdsPayload}
+	if !cloudTrailEventMatchesResource(event, "db-1", "arn:aws:rds:us-east-1:123456789012:db:db-1") {
+		t.Fatal("expected RDS identifier field to match resource")
 	}
 }
 

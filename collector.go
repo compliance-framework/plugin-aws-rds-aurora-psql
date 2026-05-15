@@ -438,6 +438,8 @@ func snapshotDynamic(cloudTrailEvents []map[string]interface{}, snapshotID strin
 	return map[string]interface{}{
 		"cloudtrail_events":         resourceEvents,
 		"account_cloudtrail_events": accountEvents,
+		"rds_events":                []map[string]interface{}{},
+		"cloudwatch_metrics":        map[string]interface{}{},
 	}
 }
 
@@ -717,31 +719,77 @@ func resourceMapMatches(item interface{}, sourceID string, sourceARN string) boo
 }
 
 func cloudTrailPayloadContainsResource(raw string, sourceID string, sourceARN string) bool {
-	var payload interface{}
+	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return stringMatchesResource(raw, sourceID, sourceARN)
+		return false
 	}
-	return jsonValueContainsResource(payload, sourceID, sourceARN)
+	for _, key := range []string{"resources", "requestParameters", "responseElements"} {
+		if cloudTrailPayloadSectionMatches(payload[key], sourceID, sourceARN) {
+			return true
+		}
+	}
+	return false
 }
 
-func jsonValueContainsResource(value interface{}, sourceID string, sourceARN string) bool {
+func cloudTrailPayloadSectionMatches(value interface{}, sourceID string, sourceARN string) bool {
 	switch typed := value.(type) {
-	case string:
-		return stringMatchesResource(typed, sourceID, sourceARN)
 	case []interface{}:
 		for _, item := range typed {
-			if jsonValueContainsResource(item, sourceID, sourceARN) {
+			if cloudTrailPayloadSectionMatches(item, sourceID, sourceARN) {
 				return true
 			}
 		}
 	case map[string]interface{}:
-		for _, item := range typed {
-			if jsonValueContainsResource(item, sourceID, sourceARN) {
+		for key, item := range typed {
+			if cloudTrailResourceFieldMatches(key, item, sourceID, sourceARN) {
+				return true
+			}
+			if nestedCloudTrailResourceField(key) && cloudTrailPayloadSectionMatches(item, sourceID, sourceARN) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func cloudTrailResourceFieldMatches(key string, value interface{}, sourceID string, sourceARN string) bool {
+	if !cloudTrailResourceField(key) {
+		return false
+	}
+	switch typed := value.(type) {
+	case string:
+		return stringMatchesResource(typed, sourceID, sourceARN)
+	case []interface{}:
+		for _, item := range typed {
+			if stringValue, ok := item.(string); ok && stringMatchesResource(stringValue, sourceID, sourceARN) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func cloudTrailResourceField(key string) bool {
+	switch strings.ToLower(key) {
+	case "arn", "resourcearn", "resourcename", "sourcearn",
+		"dbinstanceidentifier", "dbinstancearn",
+		"dbclusteridentifier", "dbclusterarn",
+		"dbsnapshotidentifier", "dbsnapshotarn",
+		"dbclustersnapshotidentifier", "dbclustersnapshotarn",
+		"targetdbsnapshotidentifier", "targetdbclustersnapshotidentifier":
+		return true
+	default:
+		return false
+	}
+}
+
+func nestedCloudTrailResourceField(key string) bool {
+	switch strings.ToLower(key) {
+	case "resources", "requestparameters", "responseelements":
+		return true
+	default:
+		return false
+	}
 }
 
 func stringMatchesResource(value string, sourceID string, sourceARN string) bool {
@@ -808,7 +856,7 @@ func (c *Collector) collectCloudWatchMetrics(ctx context.Context, client CloudWa
 		MetricDataQueries: queries,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get_metric_data %q: %w", resourceID, err)
+		return map[string]interface{}{}, fmt.Errorf("get_metric_data %q: %w", resourceID, err)
 	}
 	result := map[string]interface{}{}
 	for _, metric := range out.MetricDataResults {
