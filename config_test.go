@@ -61,6 +61,9 @@ func TestParsePluginConfigRejectsInvalidJSONAndIntegers(t *testing.T) {
 	if _, err := parsePluginConfig(map[string]string{"lookback_days": "0"}); err == nil {
 		t.Fatal("expected non-positive lookback_days to fail")
 	}
+	if _, err := parsePluginConfig(map[string]string{"lookback_days": "91"}); err == nil {
+		t.Fatal("expected lookback_days above CloudTrail LookupEvents limit to fail")
+	}
 }
 
 func TestEffectiveAccountsAndRegionsUseSDKDefaults(t *testing.T) {

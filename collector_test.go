@@ -41,6 +41,8 @@ type fakeRDS struct {
 	events               []rdstypes.Event
 	snapshotAttributes   []rdstypes.DBSnapshotAttribute
 	clusterSnapshotAttrs []rdstypes.DBClusterSnapshotAttribute
+	dbSnapshotAttrCalls  int
+	clusterAttrCalls     int
 }
 
 func (f *fakeRDS) DescribeDBInstances(context.Context, *rds.DescribeDBInstancesInput, ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error) {
@@ -63,12 +65,14 @@ func (f *fakeRDS) DescribeDBClusterSnapshots(context.Context, *rds.DescribeDBClu
 }
 
 func (f *fakeRDS) DescribeDBSnapshotAttributes(context.Context, *rds.DescribeDBSnapshotAttributesInput, ...func(*rds.Options)) (*rds.DescribeDBSnapshotAttributesOutput, error) {
+	f.dbSnapshotAttrCalls++
 	return &rds.DescribeDBSnapshotAttributesOutput{
 		DBSnapshotAttributesResult: &rdstypes.DBSnapshotAttributesResult{DBSnapshotAttributes: f.snapshotAttributes},
 	}, nil
 }
 
 func (f *fakeRDS) DescribeDBClusterSnapshotAttributes(context.Context, *rds.DescribeDBClusterSnapshotAttributesInput, ...func(*rds.Options)) (*rds.DescribeDBClusterSnapshotAttributesOutput, error) {
+	f.clusterAttrCalls++
 	return &rds.DescribeDBClusterSnapshotAttributesOutput{
 		DBClusterSnapshotAttributesResult: &rdstypes.DBClusterSnapshotAttributesResult{DBClusterSnapshotAttributes: f.clusterSnapshotAttrs},
 	}, nil
@@ -276,5 +280,70 @@ func TestSplitCloudTrailEventsForResourceSeparatesAccountWideEvents(t *testing.T
 	}
 	if len(accountEvents) != 1 || accountEvents[0]["event_name"] != "DeleteUser" {
 		t.Fatalf("expected IAM event to remain account-wide, got %#v", accountEvents)
+	}
+}
+
+func TestSnapshotAttributesOnlyFetchedForManualSnapshots(t *testing.T) {
+	cfg, err := parsePluginConfig(map[string]string{
+		"max_concurrency":     "1",
+		"api_timeout_seconds": "5",
+	})
+	if err != nil {
+		t.Fatalf("parsePluginConfig returned error: %v", err)
+	}
+	client := &fakeRDS{
+		snapshots: []rdstypes.DBSnapshot{
+			{
+				DBSnapshotIdentifier: aws.String("manual-db-snapshot"),
+				DBSnapshotArn:        aws.String("arn:aws:rds:us-east-1:123456789012:snapshot:manual-db-snapshot"),
+				SnapshotType:         aws.String("manual"),
+			},
+			{
+				DBSnapshotIdentifier: aws.String("automated-db-snapshot"),
+				DBSnapshotArn:        aws.String("arn:aws:rds:us-east-1:123456789012:snapshot:automated-db-snapshot"),
+				SnapshotType:         aws.String("automated"),
+			},
+		},
+		clusterSnapshots: []rdstypes.DBClusterSnapshot{
+			{
+				DBClusterSnapshotIdentifier: aws.String("manual-cluster-snapshot"),
+				DBClusterSnapshotArn:        aws.String("arn:aws:rds:us-east-1:123456789012:cluster-snapshot:manual-cluster-snapshot"),
+				SnapshotType:                aws.String("manual"),
+			},
+			{
+				DBClusterSnapshotIdentifier: aws.String("automated-cluster-snapshot"),
+				DBClusterSnapshotArn:        aws.String("arn:aws:rds:us-east-1:123456789012:cluster-snapshot:automated-cluster-snapshot"),
+				SnapshotType:                aws.String("automated"),
+			},
+		},
+		snapshotAttributes: []rdstypes.DBSnapshotAttribute{
+			{AttributeName: aws.String("restore"), AttributeValues: []string{"111111111111"}},
+		},
+		clusterSnapshotAttrs: []rdstypes.DBClusterSnapshotAttribute{
+			{AttributeName: aws.String("restore"), AttributeValues: []string{"222222222222"}},
+		},
+	}
+	factory := &fakeFactory{
+		targets: []ResolvedTarget{{Account: AccountContext{AccountID: "123456789012"}, Region: "us-east-1"}},
+		clients: map[string]AWSClientSet{
+			"us-east-1": {
+				RDS:        client,
+				CloudTrail: &fakeCloudTrail{},
+				CloudWatch: &fakeCloudWatch{},
+				STS:        &fakeSTS{account: "123456789012"},
+			},
+		},
+	}
+	result := (&Collector{Config: cfg, Factory: factory, Now: func() time.Time {
+		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	}}).Collect(context.Background())
+	if result.Err != nil {
+		t.Fatalf("expected automated snapshots not to cause attribute errors, got %v", result.Err)
+	}
+	if client.dbSnapshotAttrCalls != 1 {
+		t.Fatalf("expected only manual DB snapshot attribute call, got %d", client.dbSnapshotAttrCalls)
+	}
+	if client.clusterAttrCalls != 1 {
+		t.Fatalf("expected only manual cluster snapshot attribute call, got %d", client.clusterAttrCalls)
 	}
 }

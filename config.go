@@ -66,8 +66,8 @@ func parsePluginConfig(raw map[string]string) (*PluginConfig, error) {
 
 	if v := strings.TrimSpace(raw[configKeyLookbackDays]); v != "" {
 		i, err := strconv.Atoi(v)
-		if err != nil || i <= 0 {
-			return nil, fmt.Errorf("lookback_days must be a positive integer")
+		if err != nil || i <= 0 || i > defaultLookbackDays {
+			return nil, fmt.Errorf("lookback_days must be a positive integer no greater than %d", defaultLookbackDays)
 		}
 		cfg.LookbackDays = i
 	}

@@ -333,7 +333,7 @@ func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, targe
 			return grouped, records, fmt.Errorf("describe_db_snapshots: %w", err)
 		}
 		for _, snapshot := range out.DBSnapshots {
-			attrs, attrErr := c.collectDBSnapshotAttributes(ctx, client, aws.ToString(snapshot.DBSnapshotIdentifier))
+			attrs, attrErr := c.collectDBSnapshotAttributesIfManual(ctx, client, snapshot)
 			if attrErr != nil {
 				accumulated = errors.Join(accumulated, attrErr)
 			}
@@ -373,7 +373,7 @@ func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, 
 			return grouped, records, fmt.Errorf("describe_db_cluster_snapshots: %w", err)
 		}
 		for _, snapshot := range out.DBClusterSnapshots {
-			attrs, attrErr := c.collectDBClusterSnapshotAttributes(ctx, client, aws.ToString(snapshot.DBClusterSnapshotIdentifier))
+			attrs, attrErr := c.collectDBClusterSnapshotAttributesIfManual(ctx, client, snapshot)
 			if attrErr != nil {
 				accumulated = errors.Join(accumulated, attrErr)
 			}
@@ -402,7 +402,11 @@ func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, 
 	}
 }
 
-func (c *Collector) collectDBSnapshotAttributes(ctx context.Context, client RDSAPI, id string) ([]rdstypes.DBSnapshotAttribute, error) {
+func (c *Collector) collectDBSnapshotAttributesIfManual(ctx context.Context, client RDSAPI, snapshot rdstypes.DBSnapshot) ([]rdstypes.DBSnapshotAttribute, error) {
+	if !isManualSnapshotType(aws.ToString(snapshot.SnapshotType)) {
+		return nil, nil
+	}
+	id := aws.ToString(snapshot.DBSnapshotIdentifier)
 	out, err := client.DescribeDBSnapshotAttributes(ctx, &rds.DescribeDBSnapshotAttributesInput{DBSnapshotIdentifier: aws.String(id)})
 	if err != nil {
 		return nil, fmt.Errorf("describe_db_snapshot_attributes %q: %w", id, err)
@@ -413,7 +417,11 @@ func (c *Collector) collectDBSnapshotAttributes(ctx context.Context, client RDSA
 	return out.DBSnapshotAttributesResult.DBSnapshotAttributes, nil
 }
 
-func (c *Collector) collectDBClusterSnapshotAttributes(ctx context.Context, client RDSAPI, id string) ([]rdstypes.DBClusterSnapshotAttribute, error) {
+func (c *Collector) collectDBClusterSnapshotAttributesIfManual(ctx context.Context, client RDSAPI, snapshot rdstypes.DBClusterSnapshot) ([]rdstypes.DBClusterSnapshotAttribute, error) {
+	if !isManualSnapshotType(aws.ToString(snapshot.SnapshotType)) {
+		return nil, nil
+	}
+	id := aws.ToString(snapshot.DBClusterSnapshotIdentifier)
 	out, err := client.DescribeDBClusterSnapshotAttributes(ctx, &rds.DescribeDBClusterSnapshotAttributesInput{DBClusterSnapshotIdentifier: aws.String(id)})
 	if err != nil {
 		return nil, fmt.Errorf("describe_db_cluster_snapshot_attributes %q: %w", id, err)
@@ -422,6 +430,10 @@ func (c *Collector) collectDBClusterSnapshotAttributes(ctx context.Context, clie
 		return nil, nil
 	}
 	return out.DBClusterSnapshotAttributesResult.DBClusterSnapshotAttributes, nil
+}
+
+func isManualSnapshotType(snapshotType string) bool {
+	return strings.EqualFold(snapshotType, "manual")
 }
 
 func (c *Collector) collectTags(ctx context.Context, client RDSAPI, arn string, scope string) (map[string]string, error) {
