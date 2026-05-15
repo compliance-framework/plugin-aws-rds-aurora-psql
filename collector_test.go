@@ -17,11 +17,15 @@ import (
 )
 
 type fakeFactory struct {
-	targets []ResolvedTarget
-	clients map[string]AWSClientSet
+	targets            []ResolvedTarget
+	clients            map[string]AWSClientSet
+	resolveContextDone bool
 }
 
-func (f *fakeFactory) ResolveTargets(context.Context, *PluginConfig) ([]ResolvedTarget, error) {
+func (f *fakeFactory) ResolveTargets(ctx context.Context, _ *PluginConfig) ([]ResolvedTarget, error) {
+	if _, ok := ctx.Deadline(); ok {
+		f.resolveContextDone = true
+	}
 	return f.targets, nil
 }
 
@@ -240,6 +244,32 @@ func TestCollectorContinuesAfterTargetFailure(t *testing.T) {
 	}
 	if len(record.Input.Collection.RawPayloadHashes) == 0 {
 		t.Fatal("expected raw payload hash under collection.raw_payload_hashes")
+	}
+}
+
+func TestCollectorAppliesAPITimeoutToTargetResolution(t *testing.T) {
+	cfg, err := parsePluginConfig(map[string]string{
+		"api_timeout_seconds": "5",
+	})
+	if err != nil {
+		t.Fatalf("parsePluginConfig returned error: %v", err)
+	}
+	factory := &fakeFactory{
+		targets: []ResolvedTarget{{Account: AccountContext{AccountID: "123456789012"}, Region: "us-east-1"}},
+		clients: map[string]AWSClientSet{
+			"us-east-1": {
+				RDS:        &fakeRDS{},
+				CloudTrail: &fakeCloudTrail{},
+				CloudWatch: &fakeCloudWatch{},
+				STS:        &fakeSTS{account: "123456789012"},
+			},
+		},
+	}
+	_ = (&Collector{Config: cfg, Factory: factory, Now: func() time.Time {
+		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	}}).Collect(context.Background())
+	if !factory.resolveContextDone {
+		t.Fatal("expected ResolveTargets to receive a context with deadline")
 	}
 }
 

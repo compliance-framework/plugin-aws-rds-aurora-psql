@@ -196,7 +196,9 @@ func (c *Collector) Collect(ctx context.Context) CollectionResult {
 	windowStart, windowEnd := c.Config.lookbackWindow(collectedAt)
 	window := Window{Start: windowStart.Format(time.RFC3339), End: windowEnd.Format(time.RFC3339)}
 
-	targets, err := factory.ResolveTargets(ctx, c.Config)
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(c.Config.APITimeoutSeconds)*time.Second)
+	targets, err := factory.ResolveTargets(resolveCtx, c.Config)
+	resolveCancel()
 	var accumulated error
 	if err != nil {
 		accumulated = errors.Join(accumulated, err)
