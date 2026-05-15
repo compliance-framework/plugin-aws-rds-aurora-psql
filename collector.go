@@ -678,6 +678,9 @@ func cloudTrailEventMatchesResource(event map[string]interface{}, sourceID strin
 	if sourceID == "" && sourceARN == "" {
 		return false
 	}
+	if cloudTrailEventSource(event) != "rds.amazonaws.com" {
+		return false
+	}
 	if resources, ok := event["resources"]; ok && cloudTrailResourcesMatch(resources, sourceID, sourceARN) {
 		return true
 	}
@@ -685,6 +688,24 @@ func cloudTrailEventMatchesResource(event map[string]interface{}, sourceID strin
 		return cloudTrailPayloadContainsResource(raw, sourceID, sourceARN)
 	}
 	return false
+}
+
+func cloudTrailEventSource(event map[string]interface{}) string {
+	if eventSource, ok := event["event_source"].(string); ok && eventSource != "" {
+		return eventSource
+	}
+	raw, ok := event["cloudtrail_event"].(string)
+	if !ok || raw == "" {
+		return ""
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ""
+	}
+	if eventSource, ok := payload["eventSource"].(string); ok {
+		return eventSource
+	}
+	return ""
 }
 
 func cloudTrailResourcesMatch(resources interface{}, sourceID string, sourceARN string) bool {

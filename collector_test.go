@@ -368,17 +368,20 @@ func TestCloudTrailCollectionUsesEventSourceQueries(t *testing.T) {
 func TestSplitCloudTrailEventsForResourceSeparatesAccountWideEvents(t *testing.T) {
 	events := []map[string]interface{}{
 		{
-			"event_name": "ModifyDBInstance",
+			"event_name":   "ModifyDBInstance",
+			"event_source": "rds.amazonaws.com",
 			"resources": []cloudtrailtypes.Resource{
 				{ResourceName: aws.String("db-1")},
 			},
 		},
 		{
 			"event_name":       "DeleteDBInstance",
+			"event_source":     "rds.amazonaws.com",
 			"cloudtrail_event": `{"requestParameters":{"dBInstanceIdentifier":"db-1"}}`,
 		},
 		{
 			"event_name":       "DeleteUser",
+			"event_source":     "iam.amazonaws.com",
 			"cloudtrail_event": `{"requestParameters":{"userName":"alice"}}`,
 		},
 	}
@@ -833,11 +836,73 @@ func TestCollectionErrorsMarshalAsArrayWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestLogExportsNormalizeNilSlicesToEmptyArrays(t *testing.T) {
+	collectedAt := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	account := AccountContext{AccountID: "123456789012"}
+	instanceRecord := newInstanceRecord(
+		account,
+		"us-east-1",
+		rdstypes.DBInstance{
+			DBInstanceIdentifier: aws.String("db-1"),
+			DBInstanceArn:        aws.String("arn:aws:rds:us-east-1:123456789012:db:db-1"),
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		collectedAt,
+		Window{},
+	)
+	instanceExports, ok := instanceRecord.Input.Config["enabled_cloudwatch_logs_exports"].([]string)
+	if !ok || instanceExports == nil {
+		t.Fatalf("expected instance log exports empty array, got %#v", instanceRecord.Input.Config["enabled_cloudwatch_logs_exports"])
+	}
+	if len(instanceExports) != 0 {
+		t.Fatalf("expected no instance log exports, got %#v", instanceExports)
+	}
+
+	clusterRecord := newClusterRecord(
+		account,
+		"us-east-1",
+		rdstypes.DBCluster{
+			DBClusterIdentifier: aws.String("cluster-1"),
+			DBClusterArn:        aws.String("arn:aws:rds:us-east-1:123456789012:cluster:cluster-1"),
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		collectedAt,
+		Window{},
+	)
+	clusterExports, ok := clusterRecord.Input.Config["enabled_cloudwatch_logs_exports"].([]string)
+	if !ok || clusterExports == nil {
+		t.Fatalf("expected cluster log exports empty array, got %#v", clusterRecord.Input.Config["enabled_cloudwatch_logs_exports"])
+	}
+	if len(clusterExports) != 0 {
+		t.Fatalf("expected no cluster log exports, got %#v", clusterExports)
+	}
+}
+
 func TestCloudTrailResourceMatchingIgnoresUnrelatedIAMActors(t *testing.T) {
 	iamPayload := `{"eventSource":"iam.amazonaws.com","eventName":"DeleteUser","requestParameters":{"userName":"db-1"}}`
 	event := map[string]interface{}{"cloudtrail_event": iamPayload}
 	if cloudTrailEventMatchesResource(event, "db-1", "arn:aws:rds:us-east-1:123456789012:db:db-1") {
 		t.Fatal("expected IAM actor/user names not to match RDS resources")
+	}
+
+	event = map[string]interface{}{
+		"event_source": "iam.amazonaws.com",
+		"resources": []cloudtrailtypes.Resource{
+			{ResourceName: aws.String("db-1")},
+		},
+	}
+	if cloudTrailEventMatchesResource(event, "db-1", "arn:aws:rds:us-east-1:123456789012:db:db-1") {
+		t.Fatal("expected IAM resource names not to match RDS resources")
 	}
 
 	rdsPayload := `{"eventSource":"rds.amazonaws.com","eventName":"ModifyDBInstance","requestParameters":{"dBInstanceIdentifier":"db-1"}}`

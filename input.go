@@ -109,7 +109,7 @@ func newInstanceRecord(account AccountContext, region string, instance rdstypes.
 		"publicly_accessible":                        aws.ToBool(instance.PubliclyAccessible),
 		"iam_database_authentication_enabled":        aws.ToBool(instance.IAMDatabaseAuthenticationEnabled),
 		"ca_certificate_identifier":                  aws.ToString(instance.CACertificateIdentifier),
-		"enabled_cloudwatch_logs_exports":            instance.EnabledCloudwatchLogsExports,
+		"enabled_cloudwatch_logs_exports":            stringSliceOrEmpty(instance.EnabledCloudwatchLogsExports),
 		"monitoring_interval":                        aws.ToInt32(instance.MonitoringInterval),
 		"monitoring_role_arn":                        aws.ToString(instance.MonitoringRoleArn),
 		"enhanced_monitoring_resource_arn":           aws.ToString(instance.EnhancedMonitoringResourceArn),
@@ -147,7 +147,7 @@ func newClusterRecord(account AccountContext, region string, cluster rdstypes.DB
 		"latest_restorable_time":              formatTime(cluster.LatestRestorableTime),
 		"deletion_protection":                 aws.ToBool(cluster.DeletionProtection),
 		"iam_database_authentication_enabled": aws.ToBool(cluster.IAMDatabaseAuthenticationEnabled),
-		"enabled_cloudwatch_logs_exports":     cluster.EnabledCloudwatchLogsExports,
+		"enabled_cloudwatch_logs_exports":     stringSliceOrEmpty(cluster.EnabledCloudwatchLogsExports),
 		"db_cluster_parameter_group":          aws.ToString(cluster.DBClusterParameterGroup),
 		"ssl_enforcement":                     sslEnforcement,
 		"db_cluster_members":                  cluster.DBClusterMembers,
@@ -235,6 +235,13 @@ func clonePolicyInputs(input map[string]interface{}) map[string]interface{} {
 		out[k] = v
 	}
 	return out
+}
+
+func stringSliceOrEmpty(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func eventToMap(event types.Event) map[string]interface{} {
