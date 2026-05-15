@@ -34,13 +34,17 @@ type fakeRDS struct {
 	instancesErr         error
 	clusters             []rdstypes.DBCluster
 	snapshots            []rdstypes.DBSnapshot
+	snapshotsErr         error
 	clusterSnapshots     []rdstypes.DBClusterSnapshot
+	clusterSnapshotsErr  error
 	tags                 map[string][]rdstypes.Tag
 	parameters           []rdstypes.Parameter
 	clusterParameters    []rdstypes.Parameter
 	events               []rdstypes.Event
 	snapshotAttributes   []rdstypes.DBSnapshotAttribute
+	snapshotAttrsErr     error
 	clusterSnapshotAttrs []rdstypes.DBClusterSnapshotAttribute
+	clusterAttrsErr      error
 	dbSnapshotAttrCalls  int
 	clusterAttrCalls     int
 }
@@ -57,15 +61,24 @@ func (f *fakeRDS) DescribeDBClusters(context.Context, *rds.DescribeDBClustersInp
 }
 
 func (f *fakeRDS) DescribeDBSnapshots(context.Context, *rds.DescribeDBSnapshotsInput, ...func(*rds.Options)) (*rds.DescribeDBSnapshotsOutput, error) {
+	if f.snapshotsErr != nil {
+		return nil, f.snapshotsErr
+	}
 	return &rds.DescribeDBSnapshotsOutput{DBSnapshots: f.snapshots}, nil
 }
 
 func (f *fakeRDS) DescribeDBClusterSnapshots(context.Context, *rds.DescribeDBClusterSnapshotsInput, ...func(*rds.Options)) (*rds.DescribeDBClusterSnapshotsOutput, error) {
+	if f.clusterSnapshotsErr != nil {
+		return nil, f.clusterSnapshotsErr
+	}
 	return &rds.DescribeDBClusterSnapshotsOutput{DBClusterSnapshots: f.clusterSnapshots}, nil
 }
 
 func (f *fakeRDS) DescribeDBSnapshotAttributes(context.Context, *rds.DescribeDBSnapshotAttributesInput, ...func(*rds.Options)) (*rds.DescribeDBSnapshotAttributesOutput, error) {
 	f.dbSnapshotAttrCalls++
+	if f.snapshotAttrsErr != nil {
+		return nil, f.snapshotAttrsErr
+	}
 	return &rds.DescribeDBSnapshotAttributesOutput{
 		DBSnapshotAttributesResult: &rdstypes.DBSnapshotAttributesResult{DBSnapshotAttributes: f.snapshotAttributes},
 	}, nil
@@ -73,6 +86,9 @@ func (f *fakeRDS) DescribeDBSnapshotAttributes(context.Context, *rds.DescribeDBS
 
 func (f *fakeRDS) DescribeDBClusterSnapshotAttributes(context.Context, *rds.DescribeDBClusterSnapshotAttributesInput, ...func(*rds.Options)) (*rds.DescribeDBClusterSnapshotAttributesOutput, error) {
 	f.clusterAttrCalls++
+	if f.clusterAttrsErr != nil {
+		return nil, f.clusterAttrsErr
+	}
 	return &rds.DescribeDBClusterSnapshotAttributesOutput{
 		DBClusterSnapshotAttributesResult: &rdstypes.DBClusterSnapshotAttributesResult{DBClusterSnapshotAttributes: f.clusterSnapshotAttrs},
 	}, nil
@@ -111,9 +127,13 @@ func (r *recordingCloudTrail) LookupEvents(_ context.Context, in *cloudtrail.Loo
 
 type staticCloudTrail struct {
 	events []cloudtrailtypes.Event
+	err    error
 }
 
 func (s *staticCloudTrail) LookupEvents(_ context.Context, in *cloudtrail.LookupEventsInput, _ ...func(*cloudtrail.Options)) (*cloudtrail.LookupEventsOutput, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	eventSource := ""
 	if len(in.LookupAttributes) > 0 && in.LookupAttributes[0].AttributeKey == cloudtrailtypes.LookupAttributeKeyEventSource {
 		eventSource = aws.ToString(in.LookupAttributes[0].AttributeValue)
@@ -484,4 +504,210 @@ func TestSnapshotRecordsIncludeDynamicWindowAndMatchedCloudTrailEvents(t *testin
 			t.Fatalf("expected account-wide events for %#v", record.Input.Resource)
 		}
 	}
+}
+
+func TestSnapshotCollectionFailuresAreVisibleOnParentResources(t *testing.T) {
+	cfg, err := parsePluginConfig(map[string]string{
+		"max_concurrency":     "1",
+		"api_timeout_seconds": "5",
+	})
+	if err != nil {
+		t.Fatalf("parsePluginConfig returned error: %v", err)
+	}
+	client := &fakeRDS{
+		instances: []rdstypes.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-1"),
+				DBInstanceArn:        aws.String("arn:aws:rds:us-east-1:123456789012:db:db-1"),
+			},
+		},
+		clusters: []rdstypes.DBCluster{
+			{
+				DBClusterIdentifier: aws.String("cluster-1"),
+				DBClusterArn:        aws.String("arn:aws:rds:us-east-1:123456789012:cluster:cluster-1"),
+			},
+		},
+		snapshotsErr:        errors.New("snapshot list denied"),
+		clusterSnapshotsErr: errors.New("cluster snapshot list denied"),
+	}
+	factory := &fakeFactory{
+		targets: []ResolvedTarget{{Account: AccountContext{AccountID: "123456789012"}, Region: "us-east-1"}},
+		clients: map[string]AWSClientSet{
+			"us-east-1": {
+				RDS:        client,
+				CloudTrail: &fakeCloudTrail{},
+				CloudWatch: &fakeCloudWatch{},
+				STS:        &fakeSTS{account: "123456789012"},
+			},
+		},
+	}
+	result := (&Collector{Config: cfg, Factory: factory, Now: func() time.Time {
+		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	}}).Collect(context.Background())
+	if result.Err == nil {
+		t.Fatal("expected aggregate snapshot collection error")
+	}
+	var instanceRecord *ResourceRecord
+	var clusterRecord *ResourceRecord
+	for _, record := range result.Records {
+		switch record.Input.Resource.ID {
+		case "db-1":
+			instanceRecord = record
+		case "cluster-1":
+			clusterRecord = record
+		}
+	}
+	if instanceRecord == nil || clusterRecord == nil {
+		t.Fatalf("expected instance and cluster records, got %#v", result.Records)
+	}
+	if !hasCollectionError(instanceRecord.Input.Collection.Errors, "snapshots") {
+		t.Fatalf("expected snapshot collection error on instance record, got %#v", instanceRecord.Input.Collection.Errors)
+	}
+	if !hasCollectionError(clusterRecord.Input.Collection.Errors, "cluster_snapshots") {
+		t.Fatalf("expected cluster snapshot collection error on cluster record, got %#v", clusterRecord.Input.Collection.Errors)
+	}
+}
+
+func TestSnapshotAttributeFailuresAreVisibleOnSnapshotMapsAndRecords(t *testing.T) {
+	cfg, err := parsePluginConfig(map[string]string{
+		"max_concurrency":     "1",
+		"api_timeout_seconds": "5",
+	})
+	if err != nil {
+		t.Fatalf("parsePluginConfig returned error: %v", err)
+	}
+	client := &fakeRDS{
+		instances: []rdstypes.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-1"),
+				DBInstanceArn:        aws.String("arn:aws:rds:us-east-1:123456789012:db:db-1"),
+			},
+		},
+		clusters: []rdstypes.DBCluster{
+			{
+				DBClusterIdentifier: aws.String("cluster-1"),
+				DBClusterArn:        aws.String("arn:aws:rds:us-east-1:123456789012:cluster:cluster-1"),
+			},
+		},
+		snapshots: []rdstypes.DBSnapshot{
+			{
+				DBSnapshotIdentifier: aws.String("manual-db-snapshot"),
+				DBSnapshotArn:        aws.String("arn:aws:rds:us-east-1:123456789012:snapshot:manual-db-snapshot"),
+				DBInstanceIdentifier: aws.String("db-1"),
+				SnapshotType:         aws.String("manual"),
+			},
+		},
+		clusterSnapshots: []rdstypes.DBClusterSnapshot{
+			{
+				DBClusterSnapshotIdentifier: aws.String("manual-cluster-snapshot"),
+				DBClusterSnapshotArn:        aws.String("arn:aws:rds:us-east-1:123456789012:cluster-snapshot:manual-cluster-snapshot"),
+				DBClusterIdentifier:         aws.String("cluster-1"),
+				SnapshotType:                aws.String("manual"),
+			},
+		},
+		snapshotAttrsErr: errors.New("snapshot attributes denied"),
+		clusterAttrsErr:  errors.New("cluster snapshot attributes denied"),
+	}
+	factory := &fakeFactory{
+		targets: []ResolvedTarget{{Account: AccountContext{AccountID: "123456789012"}, Region: "us-east-1"}},
+		clients: map[string]AWSClientSet{
+			"us-east-1": {
+				RDS:        client,
+				CloudTrail: &fakeCloudTrail{},
+				CloudWatch: &fakeCloudWatch{},
+				STS:        &fakeSTS{account: "123456789012"},
+			},
+		},
+	}
+	result := (&Collector{Config: cfg, Factory: factory, Now: func() time.Time {
+		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	}}).Collect(context.Background())
+	if result.Err == nil {
+		t.Fatal("expected aggregate snapshot attribute error")
+	}
+	var instanceRecord *ResourceRecord
+	var clusterRecord *ResourceRecord
+	var snapshotRecord *ResourceRecord
+	for _, record := range result.Records {
+		switch record.Input.Resource.ID {
+		case "db-1":
+			instanceRecord = record
+		case "cluster-1":
+			clusterRecord = record
+		case "manual-db-snapshot":
+			snapshotRecord = record
+		}
+	}
+	if instanceRecord == nil || clusterRecord == nil || snapshotRecord == nil {
+		t.Fatalf("expected parent and snapshot records, got %#v", result.Records)
+	}
+	if _, ok := instanceRecord.Input.Snapshots[0]["collection_errors"]; !ok {
+		t.Fatalf("expected DB snapshot map collection_errors, got %#v", instanceRecord.Input.Snapshots[0])
+	}
+	if _, ok := clusterRecord.Input.Snapshots[0]["collection_errors"]; !ok {
+		t.Fatalf("expected cluster snapshot map collection_errors, got %#v", clusterRecord.Input.Snapshots[0])
+	}
+	if !hasCollectionError(snapshotRecord.Input.Collection.Errors, "snapshot_attributes") {
+		t.Fatalf("expected snapshot record attribute error, got %#v", snapshotRecord.Input.Collection.Errors)
+	}
+	if snapshotRecord.InventoryType != "snapshot" {
+		t.Fatalf("expected snapshot inventory type, got %q", snapshotRecord.InventoryType)
+	}
+}
+
+func TestSnapshotRecordsIncludeCloudTrailCollectionErrors(t *testing.T) {
+	cfg, err := parsePluginConfig(map[string]string{
+		"max_concurrency":     "1",
+		"api_timeout_seconds": "5",
+	})
+	if err != nil {
+		t.Fatalf("parsePluginConfig returned error: %v", err)
+	}
+	client := &fakeRDS{
+		snapshots: []rdstypes.DBSnapshot{
+			{
+				DBSnapshotIdentifier: aws.String("manual-db-snapshot"),
+				DBSnapshotArn:        aws.String("arn:aws:rds:us-east-1:123456789012:snapshot:manual-db-snapshot"),
+				SnapshotType:         aws.String("manual"),
+			},
+		},
+	}
+	factory := &fakeFactory{
+		targets: []ResolvedTarget{{Account: AccountContext{AccountID: "123456789012"}, Region: "us-east-1"}},
+		clients: map[string]AWSClientSet{
+			"us-east-1": {
+				RDS:        client,
+				CloudTrail: &staticCloudTrail{err: errors.New("cloudtrail throttled")},
+				CloudWatch: &fakeCloudWatch{},
+				STS:        &fakeSTS{account: "123456789012"},
+			},
+		},
+	}
+	result := (&Collector{Config: cfg, Factory: factory, Now: func() time.Time {
+		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	}}).Collect(context.Background())
+	if result.Err == nil {
+		t.Fatal("expected aggregate CloudTrail collection error")
+	}
+	var snapshotRecord *ResourceRecord
+	for _, record := range result.Records {
+		if record.Input.Resource.ID == "manual-db-snapshot" {
+			snapshotRecord = record
+		}
+	}
+	if snapshotRecord == nil {
+		t.Fatalf("expected snapshot record, got %#v", result.Records)
+	}
+	if !hasCollectionError(snapshotRecord.Input.Collection.Errors, "cloudtrail_events") {
+		t.Fatalf("expected CloudTrail error on snapshot record, got %#v", snapshotRecord.Input.Collection.Errors)
+	}
+}
+
+func hasCollectionError(errors []CollectionError, scope string) bool {
+	for _, err := range errors {
+		if err.Scope == scope {
+			return true
+		}
+	}
+	return false
 }

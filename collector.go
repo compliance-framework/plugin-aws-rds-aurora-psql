@@ -260,19 +260,22 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 
 	cloudTrailEvents, cloudTrailErr := c.collectCloudTrailEvents(ctx, clients.CloudTrail, windowStart, windowEnd)
 	accumulated = errors.Join(accumulated, cloudTrailErr)
+	commonResourceErrors := errorsFor(cloudTrailErr, "cloudtrail_events")
 
-	instanceSnapshots, instanceSnapshotRecords, snapErr := c.collectDBSnapshots(ctx, clients.RDS, target, collectedAt, window, cloudTrailEvents)
+	instanceSnapshots, instanceSnapshotRecords, snapErr := c.collectDBSnapshots(ctx, clients.RDS, target, collectedAt, window, cloudTrailEvents, commonResourceErrors)
 	accumulated = errors.Join(accumulated, snapErr)
-	clusterSnapshots, clusterSnapshotRecords, clusterSnapErr := c.collectClusterSnapshots(ctx, clients.RDS, target, collectedAt, window, cloudTrailEvents)
+	clusterSnapshots, clusterSnapshotRecords, clusterSnapErr := c.collectClusterSnapshots(ctx, clients.RDS, target, collectedAt, window, cloudTrailEvents, commonResourceErrors)
 	accumulated = errors.Join(accumulated, clusterSnapErr)
 	records = append(records, instanceSnapshotRecords...)
 	records = append(records, clusterSnapshotRecords...)
 
-	commonResourceErrors := errorsFor(cloudTrailErr, "cloudtrail_events")
+	snapshotCollectionErrors := errorsFor(snapErr, "snapshots")
+	clusterSnapshotCollectionErrors := errorsFor(clusterSnapErr, "cluster_snapshots")
 
 	for _, instance := range instances {
 		resourceErrors := append([]CollectionError{}, instanceErrors...)
 		resourceErrors = append(resourceErrors, commonResourceErrors...)
+		resourceErrors = append(resourceErrors, snapshotCollectionErrors...)
 		tags, tagErr := c.collectTags(ctx, clients.RDS, aws.ToString(instance.DBInstanceArn), "instance tags")
 		if tagErr != nil {
 			resourceErrors = append(resourceErrors, CollectionError{Scope: "tags", Message: tagErr.Error()})
@@ -287,6 +290,7 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 	for _, cluster := range clusters {
 		resourceErrors := append([]CollectionError{}, clusterErrors...)
 		resourceErrors = append(resourceErrors, commonResourceErrors...)
+		resourceErrors = append(resourceErrors, clusterSnapshotCollectionErrors...)
 		tags, tagErr := c.collectTags(ctx, clients.RDS, aws.ToString(cluster.DBClusterArn), "cluster tags")
 		if tagErr != nil {
 			resourceErrors = append(resourceErrors, CollectionError{Scope: "tags", Message: tagErr.Error()})
@@ -337,7 +341,7 @@ func (c *Collector) collectClusters(ctx context.Context, client RDSAPI) ([]rdsty
 	}
 }
 
-func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, target ResolvedTarget, collectedAt time.Time, window Window, cloudTrailEvents []map[string]interface{}) (map[string][]map[string]interface{}, []*ResourceRecord, error) {
+func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, target ResolvedTarget, collectedAt time.Time, window Window, cloudTrailEvents []map[string]interface{}, baseRecordErrors []CollectionError) (map[string][]map[string]interface{}, []*ResourceRecord, error) {
 	var accumulated error
 	var marker *string
 	grouped := map[string][]map[string]interface{}{}
@@ -357,6 +361,9 @@ func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, targe
 				accumulated = errors.Join(accumulated, tagErr)
 			}
 			snapMap := dbSnapshotToMap(snapshot, attrs)
+			if attrErr != nil {
+				snapMap["collection_errors"] = collectionErrorsToMaps(errorsFor(attrErr, "snapshot_attributes"))
+			}
 			sourceID := aws.ToString(snapshot.DBInstanceIdentifier)
 			grouped[sourceID] = append(grouped[sourceID], snapMap)
 			resource := ResourceIdentity{
@@ -365,7 +372,8 @@ func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, targe
 				Type:   "db-snapshot",
 				Engine: aws.ToString(snapshot.Engine),
 			}
-			recordErrors := errorsFor(attrErr, "snapshot_attributes")
+			recordErrors := append([]CollectionError{}, baseRecordErrors...)
+			recordErrors = append(recordErrors, errorsFor(attrErr, "snapshot_attributes")...)
 			recordErrors = append(recordErrors, errorsFor(tagErr, "snapshot_tags")...)
 			dynamic := snapshotDynamic(cloudTrailEvents, resource.ID, resource.ARN)
 			record := newSnapshotRecord(target.Account, target.Region, resource, snapMap, tags, dynamic, recordErrors, c.Config.PolicyInputs, collectedAt, window, snapshot)
@@ -378,7 +386,7 @@ func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, targe
 	}
 }
 
-func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, target ResolvedTarget, collectedAt time.Time, window Window, cloudTrailEvents []map[string]interface{}) (map[string][]map[string]interface{}, []*ResourceRecord, error) {
+func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, target ResolvedTarget, collectedAt time.Time, window Window, cloudTrailEvents []map[string]interface{}, baseRecordErrors []CollectionError) (map[string][]map[string]interface{}, []*ResourceRecord, error) {
 	var accumulated error
 	var marker *string
 	grouped := map[string][]map[string]interface{}{}
@@ -398,6 +406,9 @@ func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, 
 				accumulated = errors.Join(accumulated, tagErr)
 			}
 			snapMap := dbClusterSnapshotToMap(snapshot, attrs)
+			if attrErr != nil {
+				snapMap["collection_errors"] = collectionErrorsToMaps(errorsFor(attrErr, "cluster_snapshot_attributes"))
+			}
 			sourceID := aws.ToString(snapshot.DBClusterIdentifier)
 			grouped[sourceID] = append(grouped[sourceID], snapMap)
 			resource := ResourceIdentity{
@@ -406,7 +417,8 @@ func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, 
 				Type:   "db-cluster-snapshot",
 				Engine: aws.ToString(snapshot.Engine),
 			}
-			recordErrors := errorsFor(attrErr, "cluster_snapshot_attributes")
+			recordErrors := append([]CollectionError{}, baseRecordErrors...)
+			recordErrors = append(recordErrors, errorsFor(attrErr, "cluster_snapshot_attributes")...)
 			recordErrors = append(recordErrors, errorsFor(tagErr, "cluster_snapshot_tags")...)
 			dynamic := snapshotDynamic(cloudTrailEvents, resource.ID, resource.ARN)
 			record := newSnapshotRecord(target.Account, target.Region, resource, snapMap, tags, dynamic, recordErrors, c.Config.PolicyInputs, collectedAt, window, snapshot)
@@ -935,4 +947,15 @@ func errorsFor(err error, scope string) []CollectionError {
 		return nil
 	}
 	return []CollectionError{{Scope: scope, Message: err.Error()}}
+}
+
+func collectionErrorsToMaps(collectionErrors []CollectionError) []map[string]string {
+	result := make([]map[string]string, 0, len(collectionErrors))
+	for _, item := range collectionErrors {
+		result = append(result, map[string]string{
+			"scope":   item.Scope,
+			"message": item.Message,
+		})
+	}
+	return result
 }
