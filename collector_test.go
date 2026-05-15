@@ -109,6 +109,24 @@ func (r *recordingCloudTrail) LookupEvents(_ context.Context, in *cloudtrail.Loo
 	return &cloudtrail.LookupEventsOutput{}, nil
 }
 
+type staticCloudTrail struct {
+	events []cloudtrailtypes.Event
+}
+
+func (s *staticCloudTrail) LookupEvents(_ context.Context, in *cloudtrail.LookupEventsInput, _ ...func(*cloudtrail.Options)) (*cloudtrail.LookupEventsOutput, error) {
+	eventSource := ""
+	if len(in.LookupAttributes) > 0 && in.LookupAttributes[0].AttributeKey == cloudtrailtypes.LookupAttributeKeyEventSource {
+		eventSource = aws.ToString(in.LookupAttributes[0].AttributeValue)
+	}
+	filtered := make([]cloudtrailtypes.Event, 0, len(s.events))
+	for _, event := range s.events {
+		if eventSource == "" || aws.ToString(event.EventSource) == eventSource {
+			filtered = append(filtered, event)
+		}
+	}
+	return &cloudtrail.LookupEventsOutput{Events: filtered}, nil
+}
+
 type fakeCloudWatch struct{}
 
 func (f *fakeCloudWatch) GetMetricData(context.Context, *cloudwatch.GetMetricDataInput, ...func(*cloudwatch.Options)) (*cloudwatch.GetMetricDataOutput, error) {
@@ -121,6 +139,14 @@ type fakeSTS struct {
 
 func (f *fakeSTS) GetCallerIdentity(context.Context, *sts.GetCallerIdentityInput, ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
 	return &sts.GetCallerIdentityOutput{Account: aws.String(f.account)}, nil
+}
+
+type recordingSTS struct {
+	account string
+}
+
+func (r *recordingSTS) GetCallerIdentity(context.Context, *sts.GetCallerIdentityInput, ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
+	return &sts.GetCallerIdentityOutput{Account: aws.String(r.account)}, nil
 }
 
 func TestCollectorContinuesAfterTargetFailure(t *testing.T) {
@@ -230,6 +256,29 @@ func TestAssumeRoleSourceConfigUsesTargetRegion(t *testing.T) {
 	}
 	if base.Region != "" {
 		t.Fatalf("base config was mutated: %#v", base)
+	}
+}
+
+func TestResolveTargetsRejectsConfiguredAccountMismatch(t *testing.T) {
+	cfg, err := parsePluginConfig(map[string]string{
+		"accounts": `[{"account_id":"111111111111","regions":["us-east-1"]}]`,
+	})
+	if err != nil {
+		t.Fatalf("parsePluginConfig returned error: %v", err)
+	}
+	targets, err := resolveTargetsWithBaseConfig(
+		context.Background(),
+		cfg,
+		aws.Config{Region: "us-east-1", Credentials: aws.AnonymousCredentials{}},
+		func(context.Context, aws.Config) (string, error) {
+			return "222222222222", nil
+		},
+	)
+	if err == nil {
+		t.Fatal("expected configured account mismatch to return an error")
+	}
+	if len(targets) != 0 {
+		t.Fatalf("expected mismatched account target to be skipped, got %#v", targets)
 	}
 }
 
@@ -345,5 +394,94 @@ func TestSnapshotAttributesOnlyFetchedForManualSnapshots(t *testing.T) {
 	}
 	if client.clusterAttrCalls != 1 {
 		t.Fatalf("expected only manual cluster snapshot attribute call, got %d", client.clusterAttrCalls)
+	}
+}
+
+func TestSnapshotRecordsIncludeDynamicWindowAndMatchedCloudTrailEvents(t *testing.T) {
+	cfg, err := parsePluginConfig(map[string]string{
+		"max_concurrency":     "1",
+		"api_timeout_seconds": "5",
+	})
+	if err != nil {
+		t.Fatalf("parsePluginConfig returned error: %v", err)
+	}
+	client := &fakeRDS{
+		snapshots: []rdstypes.DBSnapshot{
+			{
+				DBSnapshotIdentifier: aws.String("manual-db-snapshot"),
+				DBSnapshotArn:        aws.String("arn:aws:rds:us-east-1:123456789012:snapshot:manual-db-snapshot"),
+				SnapshotType:         aws.String("manual"),
+			},
+		},
+		clusterSnapshots: []rdstypes.DBClusterSnapshot{
+			{
+				DBClusterSnapshotIdentifier: aws.String("manual-cluster-snapshot"),
+				DBClusterSnapshotArn:        aws.String("arn:aws:rds:us-east-1:123456789012:cluster-snapshot:manual-cluster-snapshot"),
+				SnapshotType:                aws.String("manual"),
+			},
+		},
+	}
+	cloudTrail := &staticCloudTrail{events: []cloudtrailtypes.Event{
+		{
+			EventName:   aws.String("DeleteDBSnapshot"),
+			EventSource: aws.String("rds.amazonaws.com"),
+			Resources: []cloudtrailtypes.Resource{
+				{ResourceName: aws.String("manual-db-snapshot")},
+			},
+		},
+		{
+			EventName:   aws.String("ModifyDBClusterSnapshotAttribute"),
+			EventSource: aws.String("rds.amazonaws.com"),
+			Resources: []cloudtrailtypes.Resource{
+				{ResourceName: aws.String("arn:aws:rds:us-east-1:123456789012:cluster-snapshot:manual-cluster-snapshot")},
+			},
+		},
+		{
+			EventName:   aws.String("DeleteUser"),
+			EventSource: aws.String("iam.amazonaws.com"),
+		},
+	}}
+	factory := &fakeFactory{
+		targets: []ResolvedTarget{{Account: AccountContext{AccountID: "123456789012"}, Region: "us-east-1"}},
+		clients: map[string]AWSClientSet{
+			"us-east-1": {
+				RDS:        client,
+				CloudTrail: cloudTrail,
+				CloudWatch: &fakeCloudWatch{},
+				STS:        &fakeSTS{account: "123456789012"},
+			},
+		},
+	}
+	result := (&Collector{Config: cfg, Factory: factory, Now: func() time.Time {
+		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	}}).Collect(context.Background())
+	if result.Err != nil {
+		t.Fatalf("Collect returned error: %v", result.Err)
+	}
+	var dbSnapshot *ResourceRecord
+	var clusterSnapshot *ResourceRecord
+	for _, record := range result.Records {
+		switch record.Input.Resource.ID {
+		case "manual-db-snapshot":
+			dbSnapshot = record
+		case "manual-cluster-snapshot":
+			clusterSnapshot = record
+		}
+	}
+	if dbSnapshot == nil || clusterSnapshot == nil {
+		t.Fatalf("expected both snapshot records, got %#v", result.Records)
+	}
+	for _, record := range []*ResourceRecord{dbSnapshot, clusterSnapshot} {
+		if record.Input.Collection.LookbackWindow == nil {
+			t.Fatalf("expected lookback window on snapshot record %#v", record.Input.Resource)
+		}
+		events := record.Input.Dynamic["cloudtrail_events"].([]map[string]interface{})
+		if len(events) != 1 {
+			t.Fatalf("expected one matched snapshot event for %#v, got %#v", record.Input.Resource, events)
+		}
+		accountEvents := record.Input.Dynamic["account_cloudtrail_events"].([]map[string]interface{})
+		if len(accountEvents) == 0 {
+			t.Fatalf("expected account-wide events for %#v", record.Input.Resource)
+		}
 	}
 }

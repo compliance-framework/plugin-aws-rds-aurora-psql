@@ -84,6 +84,16 @@ func (f *SDKClientFactory) ResolveTargets(ctx context.Context, cfg *PluginConfig
 	if err != nil {
 		return nil, fmt.Errorf("load AWS SDK config: %w", err)
 	}
+	return resolveTargetsWithBaseConfig(ctx, cfg, baseCfg, func(ctx context.Context, cfg aws.Config) (string, error) {
+		identity, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+		if err != nil {
+			return "", err
+		}
+		return aws.ToString(identity.Account), nil
+	})
+}
+
+func resolveTargetsWithBaseConfig(ctx context.Context, cfg *PluginConfig, baseCfg aws.Config, resolveAccountID func(context.Context, aws.Config) (string, error)) ([]ResolvedTarget, error) {
 	if err := cfg.validateResolvedDefaults(baseCfg.Region); err != nil {
 		return nil, err
 	}
@@ -114,13 +124,17 @@ func (f *SDKClientFactory) ResolveTargets(ctx context.Context, cfg *PluginConfig
 				})
 				targetCfg.Credentials = aws.NewCredentialsCache(provider)
 			}
-			stsClient := sts.NewFromConfig(targetCfg)
-			identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+			resolvedAccountID, err := resolveAccountID(ctx, targetCfg)
 			actualAccountID := account.AccountID
 			if err != nil {
 				accumulated = errors.Join(accumulated, fmt.Errorf("resolve caller identity for account %q region %q: %w", account.AccountID, region, err))
-			} else if actualAccountID == "" {
-				actualAccountID = aws.ToString(identity.Account)
+				continue
+			}
+			if actualAccountID == "" {
+				actualAccountID = resolvedAccountID
+			} else if resolvedAccountID != "" && actualAccountID != resolvedAccountID {
+				accumulated = errors.Join(accumulated, fmt.Errorf("configured account_id %q does not match resolved AWS account %q for region %q", actualAccountID, resolvedAccountID, region))
+				continue
 			}
 			targets = append(targets, ResolvedTarget{
 				Account: AccountContext{
@@ -244,15 +258,16 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 	clusters, clusterErrors := c.collectClusters(ctx, clients.RDS)
 	accumulated = joinCollectionErrors(accumulated, clusterErrors)
 
-	instanceSnapshots, instanceSnapshotRecords, snapErr := c.collectDBSnapshots(ctx, clients.RDS, target, collectedAt)
+	cloudTrailEvents, cloudTrailErr := c.collectCloudTrailEvents(ctx, clients.CloudTrail, windowStart, windowEnd)
+	accumulated = errors.Join(accumulated, cloudTrailErr)
+
+	instanceSnapshots, instanceSnapshotRecords, snapErr := c.collectDBSnapshots(ctx, clients.RDS, target, collectedAt, window, cloudTrailEvents)
 	accumulated = errors.Join(accumulated, snapErr)
-	clusterSnapshots, clusterSnapshotRecords, clusterSnapErr := c.collectClusterSnapshots(ctx, clients.RDS, target, collectedAt)
+	clusterSnapshots, clusterSnapshotRecords, clusterSnapErr := c.collectClusterSnapshots(ctx, clients.RDS, target, collectedAt, window, cloudTrailEvents)
 	accumulated = errors.Join(accumulated, clusterSnapErr)
 	records = append(records, instanceSnapshotRecords...)
 	records = append(records, clusterSnapshotRecords...)
 
-	cloudTrailEvents, cloudTrailErr := c.collectCloudTrailEvents(ctx, clients.CloudTrail, windowStart, windowEnd)
-	accumulated = errors.Join(accumulated, cloudTrailErr)
 	commonResourceErrors := errorsFor(cloudTrailErr, "cloudtrail_events")
 
 	for _, instance := range instances {
@@ -322,7 +337,7 @@ func (c *Collector) collectClusters(ctx context.Context, client RDSAPI) ([]rdsty
 	}
 }
 
-func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, target ResolvedTarget, collectedAt time.Time) (map[string][]map[string]interface{}, []*ResourceRecord, error) {
+func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, target ResolvedTarget, collectedAt time.Time, window Window, cloudTrailEvents []map[string]interface{}) (map[string][]map[string]interface{}, []*ResourceRecord, error) {
 	var accumulated error
 	var marker *string
 	grouped := map[string][]map[string]interface{}{}
@@ -352,7 +367,8 @@ func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, targe
 			}
 			recordErrors := errorsFor(attrErr, "snapshot_attributes")
 			recordErrors = append(recordErrors, errorsFor(tagErr, "snapshot_tags")...)
-			record := newSnapshotRecord(target.Account, target.Region, resource, snapMap, tags, recordErrors, c.Config.PolicyInputs, collectedAt, snapshot)
+			dynamic := snapshotDynamic(cloudTrailEvents, resource.ID, resource.ARN)
+			record := newSnapshotRecord(target.Account, target.Region, resource, snapMap, tags, dynamic, recordErrors, c.Config.PolicyInputs, collectedAt, window, snapshot)
 			records = append(records, &record)
 		}
 		if out.Marker == nil || aws.ToString(out.Marker) == "" {
@@ -362,7 +378,7 @@ func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, targe
 	}
 }
 
-func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, target ResolvedTarget, collectedAt time.Time) (map[string][]map[string]interface{}, []*ResourceRecord, error) {
+func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, target ResolvedTarget, collectedAt time.Time, window Window, cloudTrailEvents []map[string]interface{}) (map[string][]map[string]interface{}, []*ResourceRecord, error) {
 	var accumulated error
 	var marker *string
 	grouped := map[string][]map[string]interface{}{}
@@ -392,13 +408,22 @@ func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, 
 			}
 			recordErrors := errorsFor(attrErr, "cluster_snapshot_attributes")
 			recordErrors = append(recordErrors, errorsFor(tagErr, "cluster_snapshot_tags")...)
-			record := newSnapshotRecord(target.Account, target.Region, resource, snapMap, tags, recordErrors, c.Config.PolicyInputs, collectedAt, snapshot)
+			dynamic := snapshotDynamic(cloudTrailEvents, resource.ID, resource.ARN)
+			record := newSnapshotRecord(target.Account, target.Region, resource, snapMap, tags, dynamic, recordErrors, c.Config.PolicyInputs, collectedAt, window, snapshot)
 			records = append(records, &record)
 		}
 		if out.Marker == nil || aws.ToString(out.Marker) == "" {
 			return grouped, records, accumulated
 		}
 		marker = out.Marker
+	}
+}
+
+func snapshotDynamic(cloudTrailEvents []map[string]interface{}, snapshotID string, snapshotARN string) map[string]interface{} {
+	resourceEvents, accountEvents := splitCloudTrailEventsForResource(cloudTrailEvents, snapshotID, snapshotARN)
+	return map[string]interface{}{
+		"cloudtrail_events":         resourceEvents,
+		"account_cloudtrail_events": accountEvents,
 	}
 }
 
