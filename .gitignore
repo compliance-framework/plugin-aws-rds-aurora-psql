@@ -3,3 +3,4 @@ dist/
 .DS_Store
 # TODO: Change this to match the specific plugin name
 /plugin-*
+.windsurf

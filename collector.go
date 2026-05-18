@@ -84,7 +84,7 @@ func (f *SDKClientFactory) ResolveTargets(ctx context.Context, cfg *PluginConfig
 	if err != nil {
 		return nil, fmt.Errorf("load AWS SDK config: %w", err)
 	}
-	return resolveTargetsWithBaseConfig(ctx, cfg, baseCfg, func(ctx context.Context, cfg aws.Config) (string, error) {
+	return resolveTargetsWithBaseConfig(ctx, cfg, baseCfg, cfg.APITimeoutSeconds, func(ctx context.Context, cfg aws.Config) (string, error) {
 		identity, err := sts.NewFromConfig(cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 		if err != nil {
 			return "", err
@@ -93,7 +93,7 @@ func (f *SDKClientFactory) ResolveTargets(ctx context.Context, cfg *PluginConfig
 	})
 }
 
-func resolveTargetsWithBaseConfig(ctx context.Context, cfg *PluginConfig, baseCfg aws.Config, resolveAccountID func(context.Context, aws.Config) (string, error)) ([]ResolvedTarget, error) {
+func resolveTargetsWithBaseConfig(ctx context.Context, cfg *PluginConfig, baseCfg aws.Config, timeoutSeconds int, resolveAccountID func(context.Context, aws.Config) (string, error)) ([]ResolvedTarget, error) {
 	if err := cfg.validateResolvedDefaults(baseCfg.Region); err != nil {
 		return nil, err
 	}
@@ -124,7 +124,10 @@ func resolveTargetsWithBaseConfig(ctx context.Context, cfg *PluginConfig, baseCf
 				})
 				targetCfg.Credentials = aws.NewCredentialsCache(provider)
 			}
-			resolvedAccountID, err := resolveAccountID(ctx, targetCfg)
+			// Apply timeout per-target to avoid large multi-account configs timing out during STS/AssumeRole resolution
+			targetCtx, targetCancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+			resolvedAccountID, err := resolveAccountID(targetCtx, targetCfg)
+			targetCancel()
 			actualAccountID := account.AccountID
 			if err != nil {
 				accumulated = errors.Join(accumulated, fmt.Errorf("resolve caller identity for account %q region %q: %w", account.AccountID, region, err))
@@ -196,9 +199,7 @@ func (c *Collector) Collect(ctx context.Context) CollectionResult {
 	windowStart, windowEnd := c.Config.lookbackWindow(collectedAt)
 	window := Window{Start: windowStart.Format(time.RFC3339), End: windowEnd.Format(time.RFC3339)}
 
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(c.Config.APITimeoutSeconds)*time.Second)
-	targets, err := factory.ResolveTargets(resolveCtx, c.Config)
-	resolveCancel()
+	targets, err := factory.ResolveTargets(ctx, c.Config)
 	var accumulated error
 	if err != nil {
 		accumulated = errors.Join(accumulated, err)
@@ -255,6 +256,10 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 	}
 
 	var records []*ResourceRecord
+	// Cache SSL enforcement values by parameter group name to avoid repeated paginated API calls
+	dbSSLCache := make(map[string]string)
+	clusterSSLCache := make(map[string]string)
+
 	instances, instanceErrors := c.collectInstances(ctx, clients.RDS)
 	accumulated = joinCollectionErrors(accumulated, instanceErrors)
 	clusters, clusterErrors := c.collectClusters(ctx, clients.RDS)
@@ -283,16 +288,9 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 			resourceErrors = append(resourceErrors, CollectionError{Scope: "tags", Message: tagErr.Error()})
 			accumulated = errors.Join(accumulated, tagErr)
 		}
-		sslEnforcement := collectInstanceSSLEnforcement(ctx, clients.RDS, instance, &resourceErrors, &accumulated)
+		sslEnforcement := collectInstanceSSLEnforcement(ctx, clients.RDS, instance, dbSSLCache, &resourceErrors, &accumulated)
 		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(instance.DBInstanceIdentifier), aws.ToString(instance.DBInstanceArn), rdstypes.SourceTypeDbInstance, "DBInstanceIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newInstanceRecord(target.Account, target.Region, instance, tags, instanceSnapshots[aws.ToString(instance.DBInstanceIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
-
-		// Debug: Print instance record data model
-		if c.Logger != nil {
-			inputJSON, _ := json.MarshalIndent(record.Input, "", "  ")
-			c.Logger.Debug("=== Instance Data Model ===", "resource_id", record.Input.Resource.ID, "data", string(inputJSON))
-		}
-
 		records = append(records, &record)
 	}
 
@@ -305,16 +303,9 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 			resourceErrors = append(resourceErrors, CollectionError{Scope: "tags", Message: tagErr.Error()})
 			accumulated = errors.Join(accumulated, tagErr)
 		}
-		sslEnforcement := collectClusterSSLEnforcement(ctx, clients.RDS, cluster, &resourceErrors, &accumulated)
+		sslEnforcement := collectClusterSSLEnforcement(ctx, clients.RDS, cluster, clusterSSLCache, &resourceErrors, &accumulated)
 		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(cluster.DBClusterIdentifier), aws.ToString(cluster.DBClusterArn), rdstypes.SourceTypeDbCluster, "DBClusterIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newClusterRecord(target.Account, target.Region, cluster, tags, clusterSnapshots[aws.ToString(cluster.DBClusterIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
-
-		// Debug: Print cluster record data model
-		if c.Logger != nil {
-			inputJSON, _ := json.MarshalIndent(record.Input, "", "  ")
-			c.Logger.Debug("=== Cluster Data Model ===", "resource_id", record.Input.Resource.ID, "data", string(inputJSON))
-		}
-
 		records = append(records, &record)
 	}
 
@@ -512,11 +503,16 @@ func (c *Collector) collectTags(ctx context.Context, client RDSAPI, arn string, 
 	return tags, nil
 }
 
-func collectInstanceSSLEnforcement(ctx context.Context, client RDSAPI, instance rdstypes.DBInstance, resourceErrors *[]CollectionError, accumulated *error) map[string]string {
+func collectInstanceSSLEnforcement(ctx context.Context, client RDSAPI, instance rdstypes.DBInstance, cache map[string]string, resourceErrors *[]CollectionError, accumulated *error) map[string]string {
 	ssl := map[string]string{}
 	for _, group := range instance.DBParameterGroups {
 		name := aws.ToString(group.DBParameterGroupName)
 		if name == "" {
+			continue
+		}
+		// Check cache first to avoid repeated paginated API calls
+		if value, ok := cache[name]; ok {
+			ssl[name] = value
 			continue
 		}
 		value, err := collectDBSSLEnforcement(ctx, client, name)
@@ -525,15 +521,21 @@ func collectInstanceSSLEnforcement(ctx context.Context, client RDSAPI, instance 
 			*accumulated = errors.Join(*accumulated, err)
 			continue
 		}
+		cache[name] = value
 		ssl[name] = value
 	}
 	return ssl
 }
 
-func collectClusterSSLEnforcement(ctx context.Context, client RDSAPI, cluster rdstypes.DBCluster, resourceErrors *[]CollectionError, accumulated *error) map[string]string {
+func collectClusterSSLEnforcement(ctx context.Context, client RDSAPI, cluster rdstypes.DBCluster, cache map[string]string, resourceErrors *[]CollectionError, accumulated *error) map[string]string {
 	ssl := map[string]string{}
 	group := aws.ToString(cluster.DBClusterParameterGroup)
 	if group == "" {
+		return ssl
+	}
+	// Check cache first to avoid repeated paginated API calls
+	if value, ok := cache[group]; ok {
+		ssl[group] = value
 		return ssl
 	}
 	value, err := collectClusterSSLEnforcementValue(ctx, client, group)
@@ -542,6 +544,7 @@ func collectClusterSSLEnforcement(ctx context.Context, client RDSAPI, cluster rd
 		*accumulated = errors.Join(*accumulated, err)
 		return ssl
 	}
+	cache[group] = value
 	ssl[group] = value
 	return ssl
 }

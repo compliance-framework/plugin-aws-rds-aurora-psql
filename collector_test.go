@@ -263,22 +263,35 @@ func TestCollectorAppliesAPITimeoutToTargetResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsePluginConfig returned error: %v", err)
 	}
-	factory := &fakeFactory{
-		targets: []ResolvedTarget{{Account: AccountContext{AccountID: "123456789012"}, Region: "us-east-1"}},
-		clients: map[string]AWSClientSet{
-			"us-east-1": {
-				RDS:        &fakeRDS{},
-				CloudTrail: &fakeCloudTrail{},
-				CloudWatch: &fakeCloudWatch{},
-				STS:        &fakeSTS{account: "123456789012"},
-			},
-		},
+	// Timeout is now applied per-target in resolveTargetsWithBaseConfig for STS/AssumeRole calls
+	// rather than globally at ResolveTargets level to prevent large multi-account configs
+	// from timing out before any collection starts
+	cfg, err = parsePluginConfig(map[string]string{
+		"api_timeout_seconds": "5",
+		"accounts":            `[{"account_id":"123456789012","regions":["us-east-1"]}]`,
+	})
+	if err != nil {
+		t.Fatalf("parsePluginConfig returned error: %v", err)
 	}
-	_ = (&Collector{Config: cfg, Factory: factory, Now: func() time.Time {
-		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
-	}}).Collect(context.Background())
-	if !factory.resolveContextDone {
-		t.Fatal("expected ResolveTargets to receive a context with deadline")
+	// Test that timeout is passed to resolveTargetsWithBaseConfig
+	targets, err := resolveTargetsWithBaseConfig(
+		context.Background(),
+		cfg,
+		aws.Config{Region: "us-east-1", Credentials: aws.AnonymousCredentials{}},
+		5, // timeout seconds
+		func(ctx context.Context, cfg aws.Config) (string, error) {
+			// Check that the context has a deadline (timeout applied per-target)
+			if _, ok := ctx.Deadline(); !ok {
+				return "", errors.New("expected context with deadline for per-target timeout")
+			}
+			return "123456789012", nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolveTargetsWithBaseConfig returned error: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
 }
 
@@ -293,12 +306,14 @@ func TestSSLEnforcementRecognizesPostgreSQLForceSSL(t *testing.T) {
 	cluster := rdstypes.DBCluster{DBClusterParameterGroup: aws.String("aurora-postgres15")}
 	var resourceErrors []CollectionError
 	var accumulated error
+	cache := make(map[string]string)
 
-	instanceSSL := collectInstanceSSLEnforcement(context.Background(), client, instance, &resourceErrors, &accumulated)
+	instanceSSL := collectInstanceSSLEnforcement(context.Background(), client, instance, cache, &resourceErrors, &accumulated)
 	if instanceSSL["postgres15"] != "1" {
 		t.Fatalf("expected instance rds.force_ssl to be normalized, got %#v", instanceSSL)
 	}
-	clusterSSL := collectClusterSSLEnforcement(context.Background(), client, cluster, &resourceErrors, &accumulated)
+	clusterCache := make(map[string]string)
+	clusterSSL := collectClusterSSLEnforcement(context.Background(), client, cluster, clusterCache, &resourceErrors, &accumulated)
 	if clusterSSL["aurora-postgres15"] != "1" {
 		t.Fatalf("expected cluster rds.force_ssl to be normalized, got %#v", clusterSSL)
 	}
@@ -329,6 +344,7 @@ func TestResolveTargetsRejectsConfiguredAccountMismatch(t *testing.T) {
 		context.Background(),
 		cfg,
 		aws.Config{Region: "us-east-1", Credentials: aws.AnonymousCredentials{}},
+		60, // timeout seconds
 		func(context.Context, aws.Config) (string, error) {
 			return "222222222222", nil
 		},
