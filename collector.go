@@ -286,6 +286,13 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 		sslEnforcement := collectInstanceSSLEnforcement(ctx, clients.RDS, instance, &resourceErrors, &accumulated)
 		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(instance.DBInstanceIdentifier), aws.ToString(instance.DBInstanceArn), rdstypes.SourceTypeDbInstance, "DBInstanceIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newInstanceRecord(target.Account, target.Region, instance, tags, instanceSnapshots[aws.ToString(instance.DBInstanceIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
+
+		// Debug: Print instance record data model
+		if c.Logger != nil {
+			inputJSON, _ := json.MarshalIndent(record.Input, "", "  ")
+			c.Logger.Debug("=== Instance Data Model ===", "resource_id", record.Input.Resource.ID, "data", string(inputJSON))
+		}
+
 		records = append(records, &record)
 	}
 
@@ -301,6 +308,13 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 		sslEnforcement := collectClusterSSLEnforcement(ctx, clients.RDS, cluster, &resourceErrors, &accumulated)
 		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(cluster.DBClusterIdentifier), aws.ToString(cluster.DBClusterArn), rdstypes.SourceTypeDbCluster, "DBClusterIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newClusterRecord(target.Account, target.Region, cluster, tags, clusterSnapshots[aws.ToString(cluster.DBClusterIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
+
+		// Debug: Print cluster record data model
+		if c.Logger != nil {
+			inputJSON, _ := json.MarshalIndent(record.Input, "", "  ")
+			c.Logger.Debug("=== Cluster Data Model ===", "resource_id", record.Input.Resource.ID, "data", string(inputJSON))
+		}
+
 		records = append(records, &record)
 	}
 
@@ -365,6 +379,9 @@ func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, targe
 			snapMap := dbSnapshotToMap(snapshot, attrs)
 			if attrErr != nil {
 				snapMap["collection_errors"] = collectionErrorsToMaps(errorsFor(attrErr, "snapshot_attributes"))
+				// Preserve unknown state for sharing posture when attributes couldn't be retrieved
+				snapMap["public"] = nil
+				snapMap["shared_accounts"] = nil
 			}
 			sourceID := aws.ToString(snapshot.DBInstanceIdentifier)
 			grouped[sourceID] = append(grouped[sourceID], snapMap)
@@ -410,6 +427,9 @@ func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, 
 			snapMap := dbClusterSnapshotToMap(snapshot, attrs)
 			if attrErr != nil {
 				snapMap["collection_errors"] = collectionErrorsToMaps(errorsFor(attrErr, "cluster_snapshot_attributes"))
+				// Preserve unknown state for sharing posture when attributes couldn't be retrieved
+				snapMap["public"] = nil
+				snapMap["shared_accounts"] = nil
 			}
 			sourceID := aws.ToString(snapshot.DBClusterIdentifier)
 			grouped[sourceID] = append(grouped[sourceID], snapMap)
