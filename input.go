@@ -140,7 +140,7 @@ func newClusterRecord(account AccountContext, region string, cluster rdstypes.DB
 		"engine_version":                      aws.ToString(cluster.EngineVersion),
 		"storage_encrypted":                   aws.ToBool(cluster.StorageEncrypted),
 		"kms_key_id":                          aws.ToString(cluster.KmsKeyId),
-		"multi_az":                            len(cluster.AvailabilityZones) > 1,
+		"multi_az":                            aws.ToBool(cluster.MultiAZ),
 		"availability_zones":                  cluster.AvailabilityZones,
 		"backup_retention_period":             aws.ToInt32(cluster.BackupRetentionPeriod),
 		"preferred_backup_window":             aws.ToString(cluster.PreferredBackupWindow),
