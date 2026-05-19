@@ -188,7 +188,7 @@ func (f *SDKClientFactory) ClientsForTarget(ctx context.Context, target Resolved
 
 func (c *Collector) Collect(ctx context.Context) CollectionResult {
 	if c.Logger != nil {
-		c.Logger.Info("Starting RDS collection", "config", c.Config)
+		c.Logger.Info("Starting RDS collection", "account_count", len(c.Config.Accounts), "max_concurrency", c.Config.MaxConcurrency, "api_timeout_seconds", c.Config.APITimeoutSeconds)
 	}
 	if c.Factory == nil {
 		c.Factory = &SDKClientFactory{}
@@ -820,29 +820,29 @@ func cloudTrailPayloadContainsAnyRDSResource(raw string) bool {
 		return false
 	}
 	for _, key := range []string{"resources", "requestParameters", "responseElements"} {
-		if cloudTrailPayloadSectionContainsAnyRDSResource(payload[key]) {
+		if cloudTrailPayloadSectionContainsAnyRDSResource(key, payload[key]) {
 			return true
 		}
 	}
 	return false
 }
 
-func cloudTrailPayloadSectionContainsAnyRDSResource(value interface{}) bool {
+func cloudTrailPayloadSectionContainsAnyRDSResource(key string, value interface{}) bool {
 	switch typed := value.(type) {
 	case []interface{}:
 		for _, item := range typed {
-			if cloudTrailPayloadSectionContainsAnyRDSResource(item) {
+			if cloudTrailPayloadSectionContainsAnyRDSResource(key, item) {
 				return true
 			}
 		}
 	case map[string]interface{}:
-		for _, item := range typed {
-			if cloudTrailPayloadSectionContainsAnyRDSResource(item) {
+		for k, item := range typed {
+			if cloudTrailPayloadSectionContainsAnyRDSResource(k, item) {
 				return true
 			}
 		}
 	case string:
-		return typed != ""
+		return cloudTrailResourceField(key) && typed != ""
 	}
 	return false
 }
@@ -965,8 +965,8 @@ func stringMatchesResource(value string, sourceID string, sourceARN string) bool
 func (c *Collector) collectRDSEvents(ctx context.Context, client RDSAPI, sourceID string, sourceType rdstypes.SourceType, start time.Time, end time.Time) ([]map[string]interface{}, error) {
 	var marker *string
 	events := make([]map[string]interface{}, 0)
-	// AWS RDS retains events for 14 days, cap to the service retention period
-	maxLookback := 14 * 24 * time.Hour
+	// AWS RDS retains events for 14 days; use 14d - 1m to avoid API errors at exact boundary
+	maxLookback := 14*24*time.Hour - time.Minute
 	if end.Sub(start) > maxLookback {
 		start = end.Add(-maxLookback)
 	}
