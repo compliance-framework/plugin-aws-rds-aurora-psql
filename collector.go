@@ -298,7 +298,7 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 	records = append(records, clusterSnapshotRecords...)
 
 	// Only attach list-level snapshot collection errors to instances/clusters
-	// Per-snapshot errors are already attached to individual snapshot records
+	// Per-snapshot errors (attribute/tag failures) are already attached to individual snapshot records
 	snapshotListErrors := errorsFor(snapErr, "snapshots")
 	clusterSnapshotListErrors := errorsFor(clusterSnapErr, "cluster_snapshots")
 
