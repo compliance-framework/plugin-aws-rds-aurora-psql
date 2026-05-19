@@ -187,9 +187,11 @@ func (f *SDKClientFactory) ClientsForTarget(ctx context.Context, target Resolved
 }
 
 func (c *Collector) Collect(ctx context.Context) CollectionResult {
-	factory := c.Factory
-	if factory == nil {
-		factory = &SDKClientFactory{}
+	if c.Logger != nil {
+		c.Logger.Info("Starting RDS collection", "config", c.Config)
+	}
+	if c.Factory == nil {
+		c.Factory = &SDKClientFactory{}
 	}
 	now := time.Now
 	if c.Now != nil {
@@ -199,10 +201,13 @@ func (c *Collector) Collect(ctx context.Context) CollectionResult {
 	windowStart, windowEnd := c.Config.lookbackWindow(collectedAt)
 	window := Window{Start: windowStart.Format(time.RFC3339), End: windowEnd.Format(time.RFC3339)}
 
-	targets, err := factory.ResolveTargets(ctx, c.Config)
+	targets, err := c.Factory.ResolveTargets(ctx, c.Config)
 	var accumulated error
 	if err != nil {
 		accumulated = errors.Join(accumulated, err)
+	}
+	if c.Logger != nil {
+		c.Logger.Info("Resolved targets", "count", len(targets), "targets", targets)
 	}
 	if len(targets) == 0 {
 		return CollectionResult{Err: errors.Join(accumulated, errors.New("no AWS account/region targets resolved"))}
@@ -221,7 +226,7 @@ func (c *Collector) Collect(ctx context.Context) CollectionResult {
 			defer wg.Done()
 			for target := range jobs {
 				targetCtx, cancel := context.WithTimeout(ctx, time.Duration(c.Config.APITimeoutSeconds)*time.Second)
-				results <- c.collectTarget(targetCtx, factory, target, collectedAt, window, windowStart, windowEnd)
+				results <- c.collectTarget(targetCtx, c.Factory, target, collectedAt, window, windowStart, windowEnd)
 				cancel()
 			}
 		}()
@@ -262,8 +267,14 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 
 	instances, instanceErrors := c.collectInstances(ctx, clients.RDS)
 	accumulated = joinCollectionErrors(accumulated, instanceErrors)
+	if c.Logger != nil {
+		c.Logger.Info("Collected instances", "count", len(instances), "errors", len(instanceErrors))
+	}
 	clusters, clusterErrors := c.collectClusters(ctx, clients.RDS)
 	accumulated = joinCollectionErrors(accumulated, clusterErrors)
+	if c.Logger != nil {
+		c.Logger.Info("Collected clusters", "count", len(clusters), "errors", len(clusterErrors))
+	}
 
 	cloudTrailEvents, cloudTrailErr := c.collectCloudTrailEvents(ctx, clients.CloudTrail, windowStart, windowEnd)
 	accumulated = errors.Join(accumulated, cloudTrailErr)
@@ -271,8 +282,14 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 
 	instanceSnapshots, instanceSnapshotRecords, snapErr := c.collectDBSnapshots(ctx, clients.RDS, target, collectedAt, window, cloudTrailEvents, commonResourceErrors)
 	accumulated = errors.Join(accumulated, snapErr)
+	if c.Logger != nil {
+		c.Logger.Info("Collected DB snapshots", "count", len(instanceSnapshots), "records", len(instanceSnapshotRecords))
+	}
 	clusterSnapshots, clusterSnapshotRecords, clusterSnapErr := c.collectClusterSnapshots(ctx, clients.RDS, target, collectedAt, window, cloudTrailEvents, commonResourceErrors)
 	accumulated = errors.Join(accumulated, clusterSnapErr)
+	if c.Logger != nil {
+		c.Logger.Info("Collected cluster snapshots", "count", len(clusterSnapshots), "records", len(clusterSnapshotRecords))
+	}
 	records = append(records, instanceSnapshotRecords...)
 	records = append(records, clusterSnapshotRecords...)
 
@@ -291,6 +308,13 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 		sslEnforcement := collectInstanceSSLEnforcement(ctx, clients.RDS, instance, dbSSLCache, &resourceErrors, &accumulated)
 		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(instance.DBInstanceIdentifier), aws.ToString(instance.DBInstanceArn), rdstypes.SourceTypeDbInstance, "DBInstanceIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newInstanceRecord(target.Account, target.Region, instance, tags, instanceSnapshots[aws.ToString(instance.DBInstanceIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
+
+		// Debug: Print instance record data model
+		if c.Logger != nil {
+			inputJSON, _ := json.MarshalIndent(record.Input, "", "  ")
+			c.Logger.Debug("=== Instance Data Model ===", "resource_id", record.Input.Resource.ID, "data", string(inputJSON))
+		}
+
 		records = append(records, &record)
 	}
 
@@ -306,6 +330,13 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 		sslEnforcement := collectClusterSSLEnforcement(ctx, clients.RDS, cluster, clusterSSLCache, &resourceErrors, &accumulated)
 		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(cluster.DBClusterIdentifier), aws.ToString(cluster.DBClusterArn), rdstypes.SourceTypeDbCluster, "DBClusterIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newClusterRecord(target.Account, target.Region, cluster, tags, clusterSnapshots[aws.ToString(cluster.DBClusterIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
+
+		// Debug: Print cluster record data model
+		if c.Logger != nil {
+			inputJSON, _ := json.MarshalIndent(record.Input, "", "  ")
+			c.Logger.Debug("=== Cluster Data Model ===", "resource_id", record.Input.Resource.ID, "data", string(inputJSON))
+		}
+
 		records = append(records, &record)
 	}
 
@@ -849,6 +880,11 @@ func stringMatchesResource(value string, sourceID string, sourceARN string) bool
 func (c *Collector) collectRDSEvents(ctx context.Context, client RDSAPI, sourceID string, sourceType rdstypes.SourceType, start time.Time, end time.Time) ([]map[string]interface{}, error) {
 	var marker *string
 	events := make([]map[string]interface{}, 0)
+	// AWS RDS only retains events for 14 days, cap to 7 days for safety
+	maxLookback := 7 * 24 * time.Hour
+	if end.Sub(start) > maxLookback {
+		start = end.Add(-maxLookback)
+	}
 	for {
 		out, err := client.DescribeEvents(ctx, &rds.DescribeEventsInput{
 			SourceIdentifier: aws.String(sourceID),
