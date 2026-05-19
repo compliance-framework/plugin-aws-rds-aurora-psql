@@ -297,13 +297,15 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 	records = append(records, instanceSnapshotRecords...)
 	records = append(records, clusterSnapshotRecords...)
 
-	snapshotCollectionErrors := errorsFor(snapErr, "snapshots")
-	clusterSnapshotCollectionErrors := errorsFor(clusterSnapErr, "cluster_snapshots")
+	// Only attach list-level snapshot collection errors to instances/clusters
+	// Per-snapshot errors are already attached to individual snapshot records
+	snapshotListErrors := errorsFor(snapErr, "snapshots")
+	clusterSnapshotListErrors := errorsFor(clusterSnapErr, "cluster_snapshots")
 
 	for _, instance := range instances {
 		resourceErrors := append([]CollectionError{}, instanceErrors...)
 		resourceErrors = append(resourceErrors, commonResourceErrors...)
-		resourceErrors = append(resourceErrors, snapshotCollectionErrors...)
+		resourceErrors = append(resourceErrors, snapshotListErrors...)
 		tags, tagErr := c.collectTags(ctx, clients.RDS, aws.ToString(instance.DBInstanceArn), "instance tags")
 		if tagErr != nil {
 			resourceErrors = append(resourceErrors, CollectionError{Scope: "tags", Message: tagErr.Error()})
@@ -312,20 +314,13 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 		sslEnforcement := collectInstanceSSLEnforcement(ctx, clients.RDS, instance, dbSSLCache, &resourceErrors, &accumulated)
 		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(instance.DBInstanceIdentifier), aws.ToString(instance.DBInstanceArn), rdstypes.SourceTypeDbInstance, "DBInstanceIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newInstanceRecord(target.Account, target.Region, instance, tags, instanceSnapshots[aws.ToString(instance.DBInstanceIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
-
-		// Debug: Print instance record data model
-		if c.Logger != nil {
-			inputJSON, _ := json.MarshalIndent(record.Input, "", "  ")
-			c.Logger.Debug("=== Instance Data Model ===", "resource_id", record.Input.Resource.ID, "data", string(inputJSON))
-		}
-
 		records = append(records, &record)
 	}
 
 	for _, cluster := range clusters {
 		resourceErrors := append([]CollectionError{}, clusterErrors...)
 		resourceErrors = append(resourceErrors, commonResourceErrors...)
-		resourceErrors = append(resourceErrors, clusterSnapshotCollectionErrors...)
+		resourceErrors = append(resourceErrors, clusterSnapshotListErrors...)
 		tags, tagErr := c.collectTags(ctx, clients.RDS, aws.ToString(cluster.DBClusterArn), "cluster tags")
 		if tagErr != nil {
 			resourceErrors = append(resourceErrors, CollectionError{Scope: "tags", Message: tagErr.Error()})
@@ -334,13 +329,6 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 		sslEnforcement := collectClusterSSLEnforcement(ctx, clients.RDS, cluster, clusterSSLCache, &resourceErrors, &accumulated)
 		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(cluster.DBClusterIdentifier), aws.ToString(cluster.DBClusterArn), rdstypes.SourceTypeDbCluster, "DBClusterIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newClusterRecord(target.Account, target.Region, cluster, tags, clusterSnapshots[aws.ToString(cluster.DBClusterIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
-
-		// Debug: Print cluster record data model
-		if c.Logger != nil {
-			inputJSON, _ := json.MarshalIndent(record.Input, "", "  ")
-			c.Logger.Debug("=== Cluster Data Model ===", "resource_id", record.Input.Resource.ID, "data", string(inputJSON))
-		}
-
 		records = append(records, &record)
 	}
 
