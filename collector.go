@@ -207,7 +207,11 @@ func (c *Collector) Collect(ctx context.Context) CollectionResult {
 		accumulated = errors.Join(accumulated, err)
 	}
 	if c.Logger != nil {
-		c.Logger.Info("Resolved targets", "count", len(targets), "targets", targets)
+		targetSummaries := make([]map[string]string, len(targets))
+		for i, t := range targets {
+			targetSummaries[i] = map[string]string{"account_id": t.Account.AccountID, "region": t.Region}
+		}
+		c.Logger.Info("Resolved targets", "count", len(targets), "targets", targetSummaries)
 	}
 	if len(targets) == 0 {
 		return CollectionResult{Err: errors.Join(accumulated, errors.New("no AWS account/region targets resolved"))}
@@ -723,6 +727,10 @@ func splitCloudTrailEventsForResource(events []map[string]interface{}, sourceID 
 			resourceEvents = append(resourceEvents, event)
 			continue
 		}
+		// Only add to accountEvents if the event does not identify any RDS resource
+		if cloudTrailEventIdentifiesAnyRDSResource(event) {
+			continue
+		}
 		accountEvents = append(accountEvents, event)
 	}
 	return resourceEvents, accountEvents
@@ -760,6 +768,83 @@ func cloudTrailEventSource(event map[string]interface{}) string {
 		return eventSource
 	}
 	return ""
+}
+
+func cloudTrailEventIdentifiesAnyRDSResource(event map[string]interface{}) bool {
+	if cloudTrailEventSource(event) != "rds.amazonaws.com" {
+		return false
+	}
+	if resources, ok := event["resources"]; ok {
+		return cloudTrailResourcesIdentifyAnyRDSResource(resources)
+	}
+	if raw, ok := event["cloudtrail_event"].(string); ok && raw != "" {
+		return cloudTrailPayloadContainsAnyRDSResource(raw)
+	}
+	return false
+}
+
+func cloudTrailResourcesIdentifyAnyRDSResource(resources interface{}) bool {
+	switch typed := resources.(type) {
+	case []cloudtrailtypes.Resource:
+		for _, resource := range typed {
+			if aws.ToString(resource.ResourceName) != "" {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if resourceMapIdentifiesRDSResource(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resourceMapIdentifiesRDSResource(item interface{}) bool {
+	resource, ok := item.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	for _, key := range []string{"ResourceName", "resourceName", "resource_arn", "resourceArn", "ARN", "arn"} {
+		if value, ok := resource[key].(string); ok && value != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func cloudTrailPayloadContainsAnyRDSResource(raw string) bool {
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return false
+	}
+	for _, key := range []string{"resources", "requestParameters", "responseElements"} {
+		if cloudTrailPayloadSectionContainsAnyRDSResource(payload[key]) {
+			return true
+		}
+	}
+	return false
+}
+
+func cloudTrailPayloadSectionContainsAnyRDSResource(value interface{}) bool {
+	switch typed := value.(type) {
+	case []interface{}:
+		for _, item := range typed {
+			if cloudTrailPayloadSectionContainsAnyRDSResource(item) {
+				return true
+			}
+		}
+	case map[string]interface{}:
+		for _, item := range typed {
+			if cloudTrailPayloadSectionContainsAnyRDSResource(item) {
+				return true
+			}
+		}
+	case string:
+		return typed != ""
+	}
+	return false
 }
 
 func cloudTrailResourcesMatch(resources interface{}, sourceID string, sourceARN string) bool {
@@ -880,8 +965,8 @@ func stringMatchesResource(value string, sourceID string, sourceARN string) bool
 func (c *Collector) collectRDSEvents(ctx context.Context, client RDSAPI, sourceID string, sourceType rdstypes.SourceType, start time.Time, end time.Time) ([]map[string]interface{}, error) {
 	var marker *string
 	events := make([]map[string]interface{}, 0)
-	// AWS RDS only retains events for 14 days, cap to 7 days for safety
-	maxLookback := 7 * 24 * time.Hour
+	// AWS RDS retains events for 14 days, cap to the service retention period
+	maxLookback := 14 * 24 * time.Hour
 	if end.Sub(start) > maxLookback {
 		start = end.Add(-maxLookback)
 	}
