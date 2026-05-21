@@ -163,7 +163,7 @@ CONFIG evidence includes:
 DYNAMIC evidence uses the configured trailing window:
 
 - CloudTrail `LookupEvents` for RDS/IAM management and access-removal events
-- RDS `DescribeEvents` for backup, restoration, and deletion categories
+- RDS `DescribeEvents` for backup, restoration, and deletion categories (note: AWS RDS retains event history for approximately 14 days, so RDS event coverage may be shorter than the configured `lookback_days`)
 - CloudWatch `GetMetricData` for `CPUUtilization`, `DatabaseConnections`, and `FreeStorageSpace`
 
 `dynamic.cloudtrail_events` contains only events matched to the current resource.

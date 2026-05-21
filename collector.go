@@ -647,6 +647,9 @@ func (c *Collector) collectCloudTrailEvents(ctx context.Context, client CloudTra
 			"ModifyDBClusterSnapshotAttribute": {},
 			"RevokeDBSecurityGroupIngress":     {},
 		},
+		// Note: IAM is a global service and its CloudTrail events are recorded in us-east-1.
+		// Currently using the regional CloudTrail client, so IAM events may be missed for targets
+		// in regions other than us-east-1. Future enhancement: use us-east-1 CloudTrail client for IAM events.
 		"iam.amazonaws.com": {
 			"DeleteUser":       {},
 			"DetachRolePolicy": {},
