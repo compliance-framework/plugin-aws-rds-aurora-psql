@@ -311,7 +311,7 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 		sslEnforcement := collectInstanceSSLEnforcement(ctx, clients.RDS, instance, dbSSLCache, &resourceErrors, &accumulated)
 		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(instance.DBInstanceIdentifier), aws.ToString(instance.DBInstanceArn), rdstypes.SourceTypeDbInstance, "DBInstanceIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newInstanceRecord(target.Account, target.Region, instance, tags, instanceSnapshots[aws.ToString(instance.DBInstanceIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
-		records = append(records, &record)
+		records = append(records, record)
 	}
 
 	for _, cluster := range clusters {
@@ -325,7 +325,7 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 		sslEnforcement := collectClusterSSLEnforcement(ctx, clients.RDS, cluster, clusterSSLCache, &resourceErrors, &accumulated)
 		dynamic := c.dynamicForResource(ctx, clients, aws.ToString(cluster.DBClusterIdentifier), aws.ToString(cluster.DBClusterArn), rdstypes.SourceTypeDbCluster, "DBClusterIdentifier", windowStart, windowEnd, cloudTrailEvents, &resourceErrors, &accumulated)
 		record := newClusterRecord(target.Account, target.Region, cluster, tags, clusterSnapshots[aws.ToString(cluster.DBClusterIdentifier)], dynamic, sslEnforcement, resourceErrors, c.Config.PolicyInputs, collectedAt, window)
-		records = append(records, &record)
+		records = append(records, record)
 	}
 
 	return CollectionResult{Records: records, Err: accumulated}
@@ -406,7 +406,7 @@ func (c *Collector) collectDBSnapshots(ctx context.Context, client RDSAPI, targe
 			recordErrors = append(recordErrors, errorsFor(tagErr, "snapshot_tags")...)
 			dynamic := snapshotDynamic(cloudTrailEvents, resource.ID, resource.ARN)
 			record := newSnapshotRecord(target.Account, target.Region, resource, snapMap, tags, dynamic, recordErrors, c.Config.PolicyInputs, collectedAt, window, snapshot)
-			records = append(records, &record)
+			records = append(records, record)
 		}
 		if out.Marker == nil || aws.ToString(out.Marker) == "" {
 			return grouped, records, accumulated
@@ -454,7 +454,7 @@ func (c *Collector) collectClusterSnapshots(ctx context.Context, client RDSAPI, 
 			recordErrors = append(recordErrors, errorsFor(tagErr, "cluster_snapshot_tags")...)
 			dynamic := snapshotDynamic(cloudTrailEvents, resource.ID, resource.ARN)
 			record := newSnapshotRecord(target.Account, target.Region, resource, snapMap, tags, dynamic, recordErrors, c.Config.PolicyInputs, collectedAt, window, snapshot)
-			records = append(records, &record)
+			records = append(records, record)
 		}
 		if out.Marker == nil || aws.ToString(out.Marker) == "" {
 			return grouped, records, accumulated

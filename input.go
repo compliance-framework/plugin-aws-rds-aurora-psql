@@ -81,7 +81,7 @@ type ResourceRecord struct {
 	Raw           interface{}
 }
 
-func newInstanceRecord(account AccountContext, region string, instance rdstypes.DBInstance, tags map[string]string, snapshots []map[string]interface{}, dynamic map[string]interface{}, sslEnforcement map[string]string, errors []CollectionError, policyInputs map[string]interface{}, collectedAt time.Time, window Window) ResourceRecord {
+func newInstanceRecord(account AccountContext, region string, instance rdstypes.DBInstance, tags map[string]string, snapshots []map[string]interface{}, dynamic map[string]interface{}, sslEnforcement map[string]string, errors []CollectionError, policyInputs map[string]interface{}, collectedAt time.Time, window Window) *ResourceRecord {
 	id := aws.ToString(instance.DBInstanceIdentifier)
 	arn := aws.ToString(instance.DBInstanceArn)
 	resource := ResourceIdentity{
@@ -120,10 +120,11 @@ func newInstanceRecord(account AccountContext, region string, instance rdstypes.
 		"read_replica_source_db_instance_identifier": aws.ToString(instance.ReadReplicaSourceDBInstanceIdentifier),
 		"read_replica_db_instance_identifiers":       instance.ReadReplicaDBInstanceIdentifiers,
 	}
-	return newResourceRecord(account, region, resource, config, tags, snapshots, dynamic, errors, policyInputs, collectedAt, window, instance, "aws-rds-instance", fmt.Sprintf("aws-rds-instance/%s/%s/%s", account.AccountID, region, id), "Amazon RDS Instance ["+id+"]")
+	rec := newResourceRecord(account, region, resource, config, tags, snapshots, dynamic, errors, policyInputs, collectedAt, window, instance, "aws-rds-instance", fmt.Sprintf("aws-rds-instance/%s/%s/%s", account.AccountID, region, id), "Amazon RDS Instance ["+id+"]")
+	return &rec
 }
 
-func newClusterRecord(account AccountContext, region string, cluster rdstypes.DBCluster, tags map[string]string, snapshots []map[string]interface{}, dynamic map[string]interface{}, sslEnforcement map[string]string, errors []CollectionError, policyInputs map[string]interface{}, collectedAt time.Time, window Window) ResourceRecord {
+func newClusterRecord(account AccountContext, region string, cluster rdstypes.DBCluster, tags map[string]string, snapshots []map[string]interface{}, dynamic map[string]interface{}, sslEnforcement map[string]string, errors []CollectionError, policyInputs map[string]interface{}, collectedAt time.Time, window Window) *ResourceRecord {
 	id := aws.ToString(cluster.DBClusterIdentifier)
 	arn := aws.ToString(cluster.DBClusterArn)
 	resource := ResourceIdentity{
@@ -153,14 +154,15 @@ func newClusterRecord(account AccountContext, region string, cluster rdstypes.DB
 		"db_cluster_members":                  cluster.DBClusterMembers,
 		"vpc_security_groups":                 cluster.VpcSecurityGroups,
 	}
-	return newResourceRecord(account, region, resource, config, tags, snapshots, dynamic, errors, policyInputs, collectedAt, window, cluster, "aws-rds-cluster", fmt.Sprintf("aws-rds-cluster/%s/%s/%s", account.AccountID, region, id), "Amazon RDS Cluster ["+id+"]")
+	rec := newResourceRecord(account, region, resource, config, tags, snapshots, dynamic, errors, policyInputs, collectedAt, window, cluster, "aws-rds-cluster", fmt.Sprintf("aws-rds-cluster/%s/%s/%s", account.AccountID, region, id), "Amazon RDS Cluster ["+id+"]")
+	return &rec
 }
 
-func newSnapshotRecord(account AccountContext, region string, resource ResourceIdentity, config map[string]interface{}, tags map[string]string, dynamic map[string]interface{}, errors []CollectionError, policyInputs map[string]interface{}, collectedAt time.Time, window Window, raw interface{}) ResourceRecord {
+func newSnapshotRecord(account AccountContext, region string, resource ResourceIdentity, config map[string]interface{}, tags map[string]string, dynamic map[string]interface{}, errors []CollectionError, policyInputs map[string]interface{}, collectedAt time.Time, window Window, raw interface{}) *ResourceRecord {
 	snapshots := []map[string]interface{}{config}
 	record := newResourceRecord(account, region, resource, config, tags, snapshots, dynamic, errors, policyInputs, collectedAt, window, raw, "aws-rds-snapshot", fmt.Sprintf("aws-rds-snapshot/%s/%s/%s/%s", account.AccountID, region, resource.Type, resource.ID), "Amazon RDS Snapshot ["+resource.ID+"]")
 	record.InventoryType = "snapshot"
-	return record
+	return &record
 }
 
 func newResourceRecord(account AccountContext, region string, resource ResourceIdentity, config map[string]interface{}, tags map[string]string, snapshots []map[string]interface{}, dynamic map[string]interface{}, errors []CollectionError, policyInputs map[string]interface{}, collectedAt time.Time, window Window, raw interface{}, subjectName string, subjectID string, title string) ResourceRecord {
