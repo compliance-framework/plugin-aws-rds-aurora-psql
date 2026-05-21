@@ -167,8 +167,8 @@ DYNAMIC evidence uses the configured trailing window:
 - CloudWatch `GetMetricData` for `CPUUtilization`, `DatabaseConnections`, and `FreeStorageSpace`
 
 `dynamic.cloudtrail_events` contains only events matched to the current resource.
-Account-scoped events that do not identify the current resource are exposed under
-`dynamic.account_cloudtrail_events`.
+Account-scoped events that do not identify any RDS resource are exposed under
+`dynamic.account_cloudtrail_events` (events identifying a different RDS resource are dropped).
 
 VPC/subnet/security-group deep posture and KMS key internals are intentionally
 out of scope for this plugin.

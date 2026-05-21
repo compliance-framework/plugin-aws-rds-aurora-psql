@@ -566,7 +566,7 @@ func TestSnapshotRecordsIncludeDynamicWindowAndMatchedCloudTrailEvents(t *testin
 	}
 }
 
-func TestSnapshotCollectionFailuresAreVisibleOnParentResources(t *testing.T) {
+func TestSnapshotCollectionErrorsAreNotAttachedToParentResources(t *testing.T) {
 	cfg, err := parsePluginConfig(map[string]string{
 		"max_concurrency":     "1",
 		"api_timeout_seconds": "5",
