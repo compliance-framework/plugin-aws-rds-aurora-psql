@@ -174,14 +174,6 @@ func (f *fakeSTS) GetCallerIdentity(context.Context, *sts.GetCallerIdentityInput
 	return &sts.GetCallerIdentityOutput{Account: aws.String(f.account)}, nil
 }
 
-type recordingSTS struct {
-	account string
-}
-
-func (r *recordingSTS) GetCallerIdentity(context.Context, *sts.GetCallerIdentityInput, ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
-	return &sts.GetCallerIdentityOutput{Account: aws.String(r.account)}, nil
-}
-
 func TestCollectorContinuesAfterTargetFailure(t *testing.T) {
 	cfg, err := parsePluginConfig(map[string]string{
 		"max_concurrency":     "1",
@@ -257,16 +249,10 @@ func TestCollectorContinuesAfterTargetFailure(t *testing.T) {
 }
 
 func TestCollectorAppliesAPITimeoutToTargetResolution(t *testing.T) {
-	cfg, err := parsePluginConfig(map[string]string{
-		"api_timeout_seconds": "5",
-	})
-	if err != nil {
-		t.Fatalf("parsePluginConfig returned error: %v", err)
-	}
 	// Timeout is now applied per-target in resolveTargetsWithBaseConfig for STS/AssumeRole calls
 	// rather than globally at ResolveTargets level to prevent large multi-account configs
 	// from timing out before any collection starts
-	cfg, err = parsePluginConfig(map[string]string{
+	cfg, err := parsePluginConfig(map[string]string{
 		"api_timeout_seconds": "5",
 		"accounts":            `[{"account_id":"123456789012","regions":["us-east-1"]}]`,
 	})

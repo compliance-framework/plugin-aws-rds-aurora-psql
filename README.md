@@ -147,7 +147,7 @@ receive one input document per resource:
 ```
 
 `collection.raw_payload_hashes` is for traceability only. It is not used in
-identity labels or evidence seeding labels.
+identity labels or evidence-seeding labels.
 
 ## Collection Coverage
 
