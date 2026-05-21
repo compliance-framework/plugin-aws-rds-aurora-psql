@@ -22,9 +22,21 @@ jobs:
       - name: Install gooci cli
         run: go install github.com/compliance-framework/gooci@v0.0.7
       - name: Authenticate gooci cli
-        run: gooci login ghcr.io --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_ACTOR_SAFE: ${{ github.actor }}
+          GITHUB_TOKEN_SAFE: ${{ secrets.GITHUB_TOKEN }}
+        run: gooci login ghcr.io --username "${GITHUB_ACTOR_SAFE}" --password "${GITHUB_TOKEN_SAFE}"
       - name: gooci Upload Version
-        run: gooci upload --annotate="org.ccf.plugin.protocol.version=2" dist/ ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{github.ref_name}}
+        env:
+          REPO_OWNER_SAFE: ${{ github.repository_owner }}
+          REPO_NAME_SAFE: ${{ github.event.repository.name }}
+          REF_NAME_SAFE: ${{ github.ref_name }}
+        run: |
+          SAFE_TAG="$(printf '%s' "${REF_NAME_SAFE}" | tr '/:@ ' '-' | tr -cd '[:alnum:]_.-')"
+          gooci upload --annotate="org.ccf.plugin.protocol.version=2" "dist/" "ghcr.io/${REPO_OWNER_SAFE}/${REPO_NAME_SAFE}:${SAFE_TAG}"
       - name: gooci Upload Latest
         if: "!github.event.release.prerelease"
-        run: gooci upload --annotate="org.ccf.plugin.protocol.version=2" dist/ ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
+        env:
+          REPO_OWNER_SAFE: ${{ github.repository_owner }}
+          REPO_NAME_SAFE: ${{ github.event.repository.name }}
+        run: gooci upload --annotate="org.ccf.plugin.protocol.version=2" "dist/" "ghcr.io/${REPO_OWNER_SAFE}/${REPO_NAME_SAFE}:latest"
