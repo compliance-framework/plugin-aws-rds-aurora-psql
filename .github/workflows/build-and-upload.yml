@@ -33,6 +33,15 @@ jobs:
           REF_NAME_SAFE: ${{ github.ref_name }}
         run: |
           SAFE_TAG="$(printf '%s' "${REF_NAME_SAFE}" | tr '/:@ ' '-' | tr -cd '[:alnum:]_.-')"
+          SAFE_TAG="${SAFE_TAG:0:128}"
+          if [ -z "${SAFE_TAG}" ]; then
+            SAFE_TAG="latest"
+          fi
+          case "${SAFE_TAG}" in
+            [.-]*)
+              SAFE_TAG="0${SAFE_TAG:0:127}"
+              ;;
+          esac
           gooci upload --annotate="org.ccf.plugin.protocol.version=2" "dist/" "ghcr.io/${REPO_OWNER_SAFE}/${REPO_NAME_SAFE}:${SAFE_TAG}"
       - name: gooci Upload Latest
         if: "!github.event.release.prerelease"

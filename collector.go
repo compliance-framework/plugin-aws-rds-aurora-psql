@@ -207,11 +207,12 @@ func (c *Collector) Collect(ctx context.Context) CollectionResult {
 		accumulated = errors.Join(accumulated, err)
 	}
 	if c.Logger != nil {
+		c.Logger.Info("Resolved targets", "count", len(targets))
 		targetSummaries := make([]map[string]string, len(targets))
 		for i, t := range targets {
 			targetSummaries[i] = map[string]string{"account_id": t.Account.AccountID, "region": t.Region}
 		}
-		c.Logger.Info("Resolved targets", "count", len(targets), "targets", targetSummaries)
+		c.Logger.Debug("Resolved targets details", "targets", targetSummaries)
 	}
 	if len(targets) == 0 {
 		return CollectionResult{Err: errors.Join(accumulated, errors.New("no AWS account/region targets resolved"))}
