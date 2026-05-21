@@ -368,7 +368,7 @@ func TestCloudTrailCollectionUsesEventSourceQueries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collectCloudTrailEvents returned error: %v", err)
 	}
-	if len(client.lookupAttributes) != 2 {
+	if len(client.lookupAttributes) != 1 {
 		t.Fatalf("expected one lookup per event source, got %d", len(client.lookupAttributes))
 	}
 	for _, attrs := range client.lookupAttributes {
@@ -557,9 +557,11 @@ func TestSnapshotRecordsIncludeDynamicWindowAndMatchedCloudTrailEvents(t *testin
 		if len(events) != 1 {
 			t.Fatalf("expected one matched snapshot event for %#v, got %#v", record.Input.Resource, events)
 		}
+		// IAM events are no longer collected since IAM is a global service
+		// and regional CloudTrail clients miss events for targets outside us-east-1
 		accountEvents := record.Input.Dynamic["account_cloudtrail_events"].([]map[string]interface{})
-		if len(accountEvents) == 0 {
-			t.Fatalf("expected account-wide events for %#v", record.Input.Resource)
+		if len(accountEvents) != 0 {
+			t.Fatalf("expected no account-wide IAM events for %#v, got %d", record.Input.Resource, len(accountEvents))
 		}
 	}
 }

@@ -162,7 +162,7 @@ CONFIG evidence includes:
 
 DYNAMIC evidence uses the configured trailing window:
 
-- CloudTrail `LookupEvents` for RDS/IAM management and access-removal events
+- CloudTrail `LookupEvents` for RDS management and access-removal events (note: IAM events are not collected since IAM is a global service and its CloudTrail events are recorded in us-east-1; the current implementation uses regional CloudTrail clients)
 - RDS `DescribeEvents` for backup, restoration, and deletion categories (note: AWS RDS retains event history for approximately 14 days, so RDS event coverage may be shorter than the configured `lookback_days`)
 - CloudWatch `GetMetricData` for `CPUUtilization`, `DatabaseConnections`, and `FreeStorageSpace`
 
