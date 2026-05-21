@@ -737,6 +737,10 @@ func cloudTrailEventSource(event map[string]interface{}) string {
 	if eventSource, ok := event["event_source"].(string); ok && eventSource != "" {
 		return eventSource
 	}
+	// Check if we already cached the parsed eventSource
+	if cachedSource, ok := event["_cached_event_source"].(string); ok {
+		return cachedSource
+	}
 	raw, ok := event["cloudtrail_event"].(string)
 	if !ok || raw == "" {
 		return ""
@@ -746,6 +750,8 @@ func cloudTrailEventSource(event map[string]interface{}) string {
 		return ""
 	}
 	if eventSource, ok := payload["eventSource"].(string); ok {
+		// Cache the parsed eventSource to avoid repeated JSON unmarshalling
+		event["_cached_event_source"] = eventSource
 		return eventSource
 	}
 	return ""
