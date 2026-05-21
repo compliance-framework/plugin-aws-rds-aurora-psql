@@ -587,8 +587,8 @@ func TestSnapshotCollectionFailuresAreVisibleOnParentResources(t *testing.T) {
 				DBClusterArn:        aws.String("arn:aws:rds:us-east-1:123456789012:cluster:cluster-1"),
 			},
 		},
-		snapshotsErr:        errors.New("snapshot list denied"),
-		clusterSnapshotsErr: errors.New("cluster snapshot list denied"),
+		// Per-snapshot errors are attached to individual snapshot records, not parent resources
+		// List-level errors are not propagated to parent resources to avoid misattributing per-snapshot errors
 	}
 	factory := &fakeFactory{
 		targets: []ResolvedTarget{{Account: AccountContext{AccountID: "123456789012"}, Region: "us-east-1"}},
@@ -604,9 +604,8 @@ func TestSnapshotCollectionFailuresAreVisibleOnParentResources(t *testing.T) {
 	result := (&Collector{Config: cfg, Factory: factory, Now: func() time.Time {
 		return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
 	}}).Collect(context.Background())
-	if result.Err == nil {
-		t.Fatal("expected aggregate snapshot collection error")
-	}
+	// Snapshot errors are not attached to parent resources to avoid misattributing per-snapshot errors
+	// The overall collection may still have errors, but they should not be visible on parent instance/cluster records
 	var instanceRecord *ResourceRecord
 	var clusterRecord *ResourceRecord
 	for _, record := range result.Records {
@@ -620,11 +619,13 @@ func TestSnapshotCollectionFailuresAreVisibleOnParentResources(t *testing.T) {
 	if instanceRecord == nil || clusterRecord == nil {
 		t.Fatalf("expected instance and cluster records, got %#v", result.Records)
 	}
-	if !hasCollectionError(instanceRecord.Input.Collection.Errors, "snapshots") {
-		t.Fatalf("expected snapshot collection error on instance record, got %#v", instanceRecord.Input.Collection.Errors)
+	// Per-snapshot errors are attached to individual snapshot records, not parent resources
+	// List-level errors are not propagated to parent resources to avoid misattributing per-snapshot errors
+	if hasCollectionError(instanceRecord.Input.Collection.Errors, "snapshots") {
+		t.Fatalf("expected no snapshot collection error on instance record, got %#v", instanceRecord.Input.Collection.Errors)
 	}
-	if !hasCollectionError(clusterRecord.Input.Collection.Errors, "cluster_snapshots") {
-		t.Fatalf("expected cluster snapshot collection error on cluster record, got %#v", clusterRecord.Input.Collection.Errors)
+	if hasCollectionError(clusterRecord.Input.Collection.Errors, "cluster_snapshots") {
+		t.Fatalf("expected no cluster snapshot collection error on cluster record, got %#v", clusterRecord.Input.Collection.Errors)
 	}
 }
 

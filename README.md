@@ -23,7 +23,7 @@ JSON-encoded strings.
 | --- | --- | --- |
 | `accounts` | No | JSON array of account targets. Empty means use the account from the configured AWS credential chain. |
 | `default_regions` | No | JSON array of regions used when an account omits `regions`. Empty means use the AWS SDK default region. |
-| `lookback_days` | No | Dynamic evidence trailing window in days. Default: `90`. |
+| `lookback_days` | No | Dynamic evidence trailing window in days. Default: `90`. Maximum: `90` (due to CloudTrail LookupEvents limits). |
 | `policy_inputs` | No | JSON object exposed to Rego as `input.policy_inputs`. |
 | `policy_labels` | No | JSON string map merged into evidence labels. |
 | `max_concurrency` | No | Maximum concurrent account/region collection workers. Default: `4`. |

@@ -73,12 +73,14 @@ func parsePluginConfig(raw map[string]string) (*PluginConfig, error) {
 	}
 
 	policyInputsRaw := strings.TrimSpace(raw[configKeyPolicyInputs])
+	policyInputsKey := configKeyPolicyInputs
 	if policyInputsRaw == "" {
 		policyInputsRaw = strings.TrimSpace(raw[configKeyPolicyInput])
+		policyInputsKey = configKeyPolicyInput
 	}
 	if policyInputsRaw != "" {
 		if err := json.Unmarshal([]byte(policyInputsRaw), &cfg.PolicyInputs); err != nil {
-			return nil, fmt.Errorf("could not parse policy_inputs: %w", err)
+			return nil, fmt.Errorf("could not parse %s: %w", policyInputsKey, err)
 		}
 	}
 

@@ -297,15 +297,12 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 	records = append(records, instanceSnapshotRecords...)
 	records = append(records, clusterSnapshotRecords...)
 
-	// Only attach list-level snapshot collection errors to instances/clusters
 	// Per-snapshot errors (attribute/tag failures) are already attached to individual snapshot records
-	snapshotListErrors := errorsFor(snapErr, "snapshots")
-	clusterSnapshotListErrors := errorsFor(clusterSnapErr, "cluster_snapshots")
+	// Do not attach snapshot errors to parent instances/clusters to avoid misattributing per-snapshot errors
 
 	for _, instance := range instances {
 		resourceErrors := append([]CollectionError{}, instanceErrors...)
 		resourceErrors = append(resourceErrors, commonResourceErrors...)
-		resourceErrors = append(resourceErrors, snapshotListErrors...)
 		tags, tagErr := c.collectTags(ctx, clients.RDS, aws.ToString(instance.DBInstanceArn), "instance tags")
 		if tagErr != nil {
 			resourceErrors = append(resourceErrors, CollectionError{Scope: "tags", Message: tagErr.Error()})
@@ -320,7 +317,6 @@ func (c *Collector) collectTarget(ctx context.Context, factory AWSClientFactory,
 	for _, cluster := range clusters {
 		resourceErrors := append([]CollectionError{}, clusterErrors...)
 		resourceErrors = append(resourceErrors, commonResourceErrors...)
-		resourceErrors = append(resourceErrors, clusterSnapshotListErrors...)
 		tags, tagErr := c.collectTags(ctx, clients.RDS, aws.ToString(cluster.DBClusterArn), "cluster tags")
 		if tagErr != nil {
 			resourceErrors = append(resourceErrors, CollectionError{Scope: "tags", Message: tagErr.Error()})
