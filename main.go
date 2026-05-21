@@ -9,6 +9,7 @@ import (
 	policyManager "github.com/compliance-framework/agent/policy-manager"
 	"github.com/compliance-framework/agent/runner"
 	"github.com/compliance-framework/agent/runner/proto"
+	"github.com/compliance-framework/plugin-aws-rds-aurora-psql/internal"
 	"github.com/hashicorp/go-hclog"
 	goplugin "github.com/hashicorp/go-plugin"
 )
@@ -69,7 +70,7 @@ func (l *CompliancePlugin) EvaluatePolicies(ctx context.Context, request *proto.
 func (l *CompliancePlugin) evaluateRecord(ctx context.Context, policyPaths []string, record *ResourceRecord) ([]*proto.Evidence, error) {
 	var accumulated error
 	evidences := make([]*proto.Evidence, 0)
-	labels := mergeStringMaps(l.parsedConfig.PolicyLabels, record.Labels)
+	labels := internal.MergeMaps(l.parsedConfig.PolicyLabels, record.Labels)
 	activities := []*proto.Activity{
 		{
 			Title:       "Collect AWS RDS evidence",
@@ -186,16 +187,6 @@ func regoInputMap(input NormalizedInput) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("unmarshal Rego input: %w", err)
 	}
 	return result, nil
-}
-
-func mergeStringMaps(maps ...map[string]string) map[string]string {
-	result := map[string]string{}
-	for _, m := range maps {
-		for k, v := range m {
-			result[k] = v
-		}
-	}
-	return result
 }
 
 func main() {

@@ -188,7 +188,7 @@ func (f *SDKClientFactory) ClientsForTarget(ctx context.Context, target Resolved
 
 func (c *Collector) Collect(ctx context.Context) CollectionResult {
 	if c.Logger != nil {
-		c.Logger.Info("Starting RDS collection", "account_count", len(c.Config.Accounts), "max_concurrency", c.Config.MaxConcurrency, "api_timeout_seconds", c.Config.APITimeoutSeconds)
+		c.Logger.Info("Starting RDS collection", "configured_account_count", len(c.Config.Accounts), "max_concurrency", c.Config.MaxConcurrency, "api_timeout_seconds", c.Config.APITimeoutSeconds)
 	}
 	if c.Factory == nil {
 		c.Factory = &SDKClientFactory{}

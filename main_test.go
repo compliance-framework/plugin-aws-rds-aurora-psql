@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/compliance-framework/agent/runner/proto"
+	"github.com/compliance-framework/plugin-aws-rds-aurora-psql/internal"
 	"github.com/hashicorp/go-hclog"
 )
 
@@ -143,7 +144,7 @@ func TestPolicyLabelsCannotOverrideIdentityLabels(t *testing.T) {
 		"resource_id": "wrong",
 		"team":        "security",
 	}
-	labels := mergeStringMaps(policyLabels, resourceLabels)
+	labels := internal.MergeMaps(policyLabels, resourceLabels)
 	for key, expected := range resourceLabels {
 		if labels[key] != expected {
 			t.Fatalf("identity label %s was overridden: %#v", key, labels)
