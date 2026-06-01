@@ -133,7 +133,7 @@ func buildSubjectTemplates() []*proto.SubjectTemplate {
 	return []*proto.SubjectTemplate{
 		{
 			Name:                "aws-rds-instance",
-			Type:                proto.SubjectType_SUBJECT_TYPE_INVENTORY_ITEM,
+			Type:                proto.SubjectType_SUBJECT_TYPE_COMPONENT,
 			TitleTemplate:       "AWS RDS instance {{ .resource_id }} in {{ .account_id }}/{{ .region }}",
 			DescriptionTemplate: "Amazon RDS DB instance {{ .resource_id }} in AWS account {{ .account_id }} and region {{ .region }}.",
 			PurposeTemplate:     "Represents a managed RDS DB instance evaluated for compliance posture.",
@@ -147,7 +147,7 @@ func buildSubjectTemplates() []*proto.SubjectTemplate {
 		},
 		{
 			Name:                "aws-rds-cluster",
-			Type:                proto.SubjectType_SUBJECT_TYPE_INVENTORY_ITEM,
+			Type:                proto.SubjectType_SUBJECT_TYPE_COMPONENT,
 			TitleTemplate:       "AWS RDS cluster {{ .resource_id }} in {{ .account_id }}/{{ .region }}",
 			DescriptionTemplate: "Amazon Aurora/RDS DB cluster {{ .resource_id }} in AWS account {{ .account_id }} and region {{ .region }}.",
 			PurposeTemplate:     "Represents a managed RDS/Aurora DB cluster evaluated for compliance posture.",
@@ -161,7 +161,7 @@ func buildSubjectTemplates() []*proto.SubjectTemplate {
 		},
 		{
 			Name:                "aws-rds-snapshot",
-			Type:                proto.SubjectType_SUBJECT_TYPE_INVENTORY_ITEM,
+			Type:                proto.SubjectType_SUBJECT_TYPE_COMPONENT,
 			TitleTemplate:       "AWS RDS snapshot {{ .resource_id }} in {{ .account_id }}/{{ .region }}",
 			DescriptionTemplate: "Amazon RDS/Aurora snapshot {{ .resource_id }} in AWS account {{ .account_id }} and region {{ .region }}.",
 			PurposeTemplate:     "Represents an RDS snapshot evaluated for backup, encryption, and sharing posture.",
