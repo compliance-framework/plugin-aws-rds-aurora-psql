@@ -1,0 +1,2 @@
+lisa-design:
+Agent v0.7.0 added policyData to NewPolicyProcessor/New. Per W2 spec (user decision 2026-10-13), Configure keeps req.GetPolicyData().AsMap() (nil when unset, cleared on reconfigure) and passes it to every evaluation, mirroring plugin-file-attestation#7. rego_fixture_test passes nil: the fixture policies read no data.*. Self-review pass 1: no findings (lint 0 issues with shared config, race tests pass).
