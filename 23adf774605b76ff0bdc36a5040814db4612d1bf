@@ -1,2 +1,5 @@
 lisa-design:
 Callers, release-please-config.json and .goreleaser.yaml are copied byte-for-byte from the reviewed and merged plugin-file-attestation#9 (mock-plugin-1 callers with pins moved to workflows v1.5.2 and the (W1-S1) suffix dropped; cut-prerelease.yml from mock-plugin-policies-1). release-please.yml uses a concurrency group without cancel-in-progress and release.yml has none on purpose: a release run must never be cancelled half-way. Manifest seeded at 0.3.1 (releases/latest v0.3.1, final tag, ancestor of main); no bootstrap-sha.
+
+lisa-selfreview:
+Pass 1 (packs core,go,go-plugin): no findings. Checked CORE-CI-001 (every uses: pinned to v1.5.2 SHA, top-level permissions on every caller), PLUGIN-CI-001 (concurrency choices are deliberate, see design note), CORE-DOC-001 (README does not describe releasing; nothing to update). actionlint v1.7.12 clean, go build/test pass, goreleaser check + snapshot pass with archive names equal to the v0.3.1 release assets. Verdict: approve.
