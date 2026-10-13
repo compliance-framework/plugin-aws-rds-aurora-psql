@@ -52,6 +52,21 @@ Example:
 }
 ```
 
+### Policy data
+
+Any `policy_data` set on this plugin's block in the agent configuration is passed
+to every policy evaluation and is available to Rego as `data.<key>`. Values in
+the plugin's own `policy_inputs` config key stay under `input.policy_inputs`.
+
+```yaml
+plugins:
+  aws_rds:
+    # ...plugin settings as above...
+    policy_data:
+      approved_snapshot_accounts:
+        - "111111111111"
+```
+
 ## AWS Authentication
 
 The plugin uses AWS SDK v2 native authentication. It supports the default

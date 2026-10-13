@@ -19,6 +19,7 @@ type CompliancePlugin struct {
 	rawConfig    map[string]string
 	parsedConfig *PluginConfig
 	factory      AWSClientFactory
+	policyData   map[string]interface{}
 }
 
 func (l *CompliancePlugin) Configure(req *proto.ConfigureRequest) (*proto.ConfigureResponse, error) {
@@ -29,6 +30,11 @@ func (l *CompliancePlugin) Configure(req *proto.ConfigureRequest) (*proto.Config
 	}
 	l.rawConfig = req.GetConfig()
 	l.parsedConfig = parsed
+	if policyData := req.GetPolicyData(); policyData != nil {
+		l.policyData = policyData.AsMap()
+	} else {
+		l.policyData = nil
+	}
 	return &proto.ConfigureResponse{}, nil
 }
 
@@ -101,6 +107,7 @@ func (l *CompliancePlugin) evaluateRecord(ctx context.Context, policyPaths []str
 			inventoryForRecord(*record),
 			defaultActors(),
 			activities,
+			l.policyData,
 		)
 		evidence, err := processor.GenerateResults(ctx, policyPath, input)
 		evidences = append(evidences, evidence...)
