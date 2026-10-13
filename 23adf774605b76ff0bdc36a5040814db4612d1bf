@@ -1,0 +1,2 @@
+lisa-design:
+Callers, release-please-config.json and .goreleaser.yaml are copied byte-for-byte from the reviewed and merged plugin-file-attestation#9 (mock-plugin-1 callers with pins moved to workflows v1.5.2 and the (W1-S1) suffix dropped; cut-prerelease.yml from mock-plugin-policies-1). release-please.yml uses a concurrency group without cancel-in-progress and release.yml has none on purpose: a release run must never be cancelled half-way. Manifest seeded at 0.3.1 (releases/latest v0.3.1, final tag, ancestor of main); no bootstrap-sha.
