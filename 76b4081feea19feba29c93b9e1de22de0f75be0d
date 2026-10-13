@@ -1,0 +1,2 @@
+lisa-design:
+ci.yml is mock-plugin-1's caller verbatim minus its mock-only first comment; push trigger stays [main] (default branch). archives.format -> formats: [tar.gz]: goreleaser release --snapshot before/after produced the same 5 archives (Darwin arm64/x86_64, Linux arm64/i386/x86_64) with the same contents (LICENSE, README.md, plugin). release.yml and build-and-upload.yml untouched (W3). Self-review pass 1: no findings; actionlint v1.7.12 clean, lint 0 issues.
