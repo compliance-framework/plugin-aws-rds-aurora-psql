@@ -129,7 +129,7 @@ violation[{"id": "lookback_window_missing"}] if {
 		t.Fatalf("regoInputMap returned error: %v", err)
 	}
 
-	results, err := policyManager.New(context.Background(), hclog.NewNullLogger(), policyDir).Execute(context.Background(), input)
+	results, err := policyManager.New(context.Background(), hclog.NewNullLogger(), policyDir, nil).Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("policy execution failed: %v", err)
 	}

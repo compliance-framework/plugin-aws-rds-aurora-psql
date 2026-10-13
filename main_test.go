@@ -10,6 +10,7 @@ import (
 	"github.com/compliance-framework/agent/runner/proto"
 	"github.com/compliance-framework/plugin-aws-rds-aurora-psql/internal"
 	"github.com/hashicorp/go-hclog"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestBuildSubjectTemplatesOnlyIncludesEvaluatedRDSSubjects(t *testing.T) {
@@ -80,6 +81,33 @@ func TestInitUpsertsSubjectTemplates(t *testing.T) {
 	}
 	if len(api.subjectTemplates) != 3 {
 		t.Fatalf("expected three upserted subject templates, got %d", len(api.subjectTemplates))
+	}
+}
+
+func TestConfigureStoresPolicyData(t *testing.T) {
+	policyData, err := structpb.NewStruct(map[string]interface{}{
+		"approved_snapshot_accounts": []interface{}{"111111111111"},
+	})
+	if err != nil {
+		t.Fatalf("build policy data: %v", err)
+	}
+
+	plugin := &CompliancePlugin{logger: hclog.NewNullLogger()}
+	config := map[string]string{"default_regions": `["us-east-1"]`}
+
+	if _, err := plugin.Configure(&proto.ConfigureRequest{Config: config, PolicyData: policyData}); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	accounts, ok := plugin.policyData["approved_snapshot_accounts"].([]interface{})
+	if !ok || len(accounts) != 1 || accounts[0] != "111111111111" {
+		t.Fatalf("unexpected policy data: %#v", plugin.policyData)
+	}
+
+	if _, err := plugin.Configure(&proto.ConfigureRequest{Config: config}); err != nil {
+		t.Fatalf("reconfigure: %v", err)
+	}
+	if plugin.policyData != nil {
+		t.Fatalf("expected policy data to be cleared, got %#v", plugin.policyData)
 	}
 }
 
