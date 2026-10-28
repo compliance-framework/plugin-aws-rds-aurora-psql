@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.3](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/compare/v0.3.2...v0.3.3) (2026-10-28)
+
+
+### Bug Fixes
+
+* **deps:** bump agent to v0.9.3, workflows to v1.7.0 ([#29](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/29)) ([4674c36](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/4674c361adbcd35da9375e83ac1cca394e052d69))
+* **deps:** bump agent to v0.9.4 ([#35](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/35)) ([4508129](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/4508129401deb04057cfbb5bc0083bdff4bf6c54))
+* **deps:** update all non-major dependencies ([#31](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/31)) ([3f7a38f](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/3f7a38f59fe56353088f05e8e0f96b53c7678362))
+* **deps:** update aws-sdk-go-v2 monorepo ([#32](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/32)) ([b233f75](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/b233f7580bac9d1fb68fa9212412caa6b92b86db))
+* **deps:** update aws-sdk-go-v2 monorepo ([#34](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/34)) ([8dd4f1e](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/8dd4f1e78a8cac1bed4b354725980b5bac55b689))
+* **deps:** update module golang.org/x/net to v0.62.0 [security] ([#33](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/33)) ([e4e84da](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/e4e84dac5d711715dcd7e69f76352bba9ca401fe))
+
 ## [0.3.2](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/compare/v0.3.1...v0.3.2) (2026-10-14)
 
 
