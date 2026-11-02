@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.4](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/compare/v0.3.3...v0.3.4) (2026-11-02)
+
+
+### Bug Fixes
+
+* **deps:** build with the go1.26.10 toolchain so Renovate can ship Go security fixes ([#36](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/36)) ([64406ac](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/64406ac14963c195f8895524b54c1c4ed7c55ef5))
+* **deps:** bump agent to v0.9.6 ([#41](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/41)) ([b97add3](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/b97add3951877d7e85d830738ac848f2703f1c06))
+
 ## [0.3.3](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/compare/v0.3.2...v0.3.3) (2026-10-28)
 
 
