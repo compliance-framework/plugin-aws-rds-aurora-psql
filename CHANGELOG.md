@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.5](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/compare/v0.3.4...v0.3.5) (2026-11-27)
+
+
+### Bug Fixes
+
+* **deps:** update aws-sdk-go-v2 monorepo ([#42](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/42)) ([051e5a9](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/051e5a904bfdb2cff4c78576ae2466f1c59a2d09))
+* **deps:** update aws-sdk-go-v2 monorepo ([#44](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/44)) ([72150bf](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/72150bf97e52d5b37fd695772e5f8c48422f4a3d))
+* **deps:** update aws-sdk-go-v2 monorepo ([#46](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/46)) ([820383c](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/820383ceaf78a0eff17d8562773d22bdf73252e3))
+* **deps:** update aws-sdk-go-v2 monorepo ([#47](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/47)) ([ffd20f0](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/ffd20f03f0bd8cd5eb47bf693e04904d9496a6af))
+* **deps:** update aws-sdk-go-v2 monorepo ([#48](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/48)) ([0987d1b](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/0987d1bbb4d57e9e15b576886e7d5c7ead516495))
+* **deps:** update aws-sdk-go-v2 monorepo ([#50](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/50)) ([dccec97](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/dccec9770134bb0a3004aac5adf8456a04ef020f))
+* **deps:** update aws-sdk-go-v2 monorepo ([#51](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/51)) ([05b4183](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/05b418344b1c91e5e894f5ac2310426b16ebcd90))
+* **deps:** update module github.com/aws/aws-sdk-go-v2/service/cloudwatch to v1.76.0 ([#49](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/49)) ([16e99ba](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/16e99bafe90985348fca47dff9b44cec1b988155))
+* **deps:** update security fixes (gomod) [security] ([#45](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/issues/45)) ([63c39b5](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/commit/63c39b5d06f46c8e650fbe33d1e48fa2ad295f80))
+
 ## [0.3.4](https://github.com/compliance-framework/plugin-aws-rds-aurora-psql/compare/v0.3.3...v0.3.4) (2026-11-02)
 
 
